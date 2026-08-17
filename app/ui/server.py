@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                PlainTextResponse, Response, StreamingResponse)
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from .. import APP_NAME, __version__
 from ..cache.store import CacheStore
@@ -30,6 +30,8 @@ from ..models import fmt_ts
 from ..pipeline import JobManager, Pipeline, run_job
 from ..transcription.cuda_setup import cuda_available
 from ..video.ffmpeg_tools import FFmpeg, FFmpegError, is_media_file
+from ..video.reframe import (FORMATS, build_filter, plan_reframe,
+                             subject_tracking_available)
 from .filedialog import pick_file
 
 log = logging.getLogger("clipfinder.server")
@@ -63,17 +65,45 @@ class ExportBody(BaseModel):
     formats: List[str] = ["json", "csv", "txt"]
 
 
+def _clean_formats(value: Any) -> Optional[List[str]]:
+    """Coerce and filter a requested format list to known ids.
+
+    Deliberately tolerant: a stray entry should not 422 the whole export, it
+    should just be ignored.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple, set)):
+        value = [value]
+    out: List[str] = []
+    for item in value:
+        key = str(item).strip()
+        if key in FORMATS and key not in out:
+            out.append(key)
+    return out or None
+
+
 class ExportClipsBody(BaseModel):
     job_id: str
     ranks: Optional[List[int]] = None
     mode: Optional[str] = None
     captions: Optional[bool] = None
+    formats: Optional[List[Any]] = None
+    layout: Optional[str] = None
+
+    @field_validator("formats", mode="before")
+    @classmethod
+    def _fmts(cls, v):  # noqa: N805
+        return _clean_formats(v)
 
 
 class CaptionPreviewBody(BaseModel):
     job_id: str
     rank: int = 1
     seconds: float = 6.0
+    format: Optional[str] = None
+    layout: Optional[str] = None
+    captions: bool = True
 
 
 class ConfigBody(BaseModel):
@@ -178,6 +208,13 @@ def probe_path(body: PathBody) -> Dict[str, Any]:
 def analyze(body: AnalyzeBody) -> Dict[str, Any]:
     if not Path(body.path).exists():
         raise HTTPException(404, "File not found")
+    running = jobs.active()
+    if running is not None:
+        raise HTTPException(409, (
+            f"An analysis is already running ({Path(running.video_path).name}, "
+            f"{running.stage_label}). Whisper and the LLM each want the whole GPU, so "
+            "running two at once is slower than waiting. Cancel it first, or let it finish."
+        ))
     job = jobs.create(body.path)
     thread = threading.Thread(
         target=run_job, args=(CFG, job, jobs),
@@ -247,6 +284,8 @@ def export_clips_endpoint(body: ExportClipsBody) -> Dict[str, Any]:
     caps = dict(CFG.section("captions"))
     if body.captions is not None:
         caps["enabled"] = bool(body.captions)
+    rf = CFG.section("reframe")
+    formats = body.formats or rf.get("formats") or ["9:16"]
     fonts = CFG.fonts_dir
     try:
         written = export_clips(
@@ -262,6 +301,10 @@ def export_clips_endpoint(body: ExportClipsBody) -> Dict[str, Any]:
             video_height=int(video.get("height", 0) or 0),
             encoder=str(exp.get("encoder", "auto")),
             fonts_dir=str(fonts) if fonts else None,
+            formats=formats,
+            layout=str(body.layout or rf.get("layout", "crop")),
+            sample_fps=float(rf.get("sample_fps", 3.0)),
+            on_log=log.info,
         )
     except FFmpegError as exc:
         raise HTTPException(500, str(exc))
@@ -285,22 +328,33 @@ def caption_preview(body: CaptionPreviewBody):
 
     video = job.result.get("video", {})
     exp = CFG.section("export")
-    caps = {**CFG.section("captions"), "enabled": True}
+    rf = CFG.section("reframe")
+    caps = {**CFG.section("captions"), "enabled": bool(body.captions)}
     pad = float(exp.get("padding_start", 0.15))
     start = max(0.0, float(clip["start"]) - pad)
     end = min(float(clip["end"]), start + max(2.0, float(body.seconds)))
 
+    src_w = int(video.get("width", 0) or 0)
+    src_h = int(video.get("height", 0) or 0)
+    fmt = body.format or (rf.get("formats") or ["9:16"])[0]
+    layout = str(body.layout or rf.get("layout", "crop"))
+
     tmp = Path(tempfile.mkdtemp(prefix="capprev_"))
-    ass = write_ass_for_clip(_clip_words(clip), start, end,
-                             int(video.get("width", 0) or 0),
-                             int(video.get("height", 0) or 0),
-                             caps, tmp / "p.ass")
     out = tmp / "preview.mp4"
-    fonts = CFG.fonts_dir
     try:
-        ffmpeg().burn(video.get("path"), str(out), start, end, str(ass),
-                      encoder=str(exp.get("encoder", "auto")),
-                      fonts_dir=str(fonts) if fonts else None)
+        path = plan_reframe(ffmpeg().ffmpeg, video.get("path"), start, end, fmt,
+                            src_w, src_h, layout=layout,
+                            sample_fps=float(rf.get("sample_fps", 3.0)),
+                            on_log=log.info)
+        sub = None
+        if caps["enabled"]:
+            _, ow, oh = build_filter(src_w, src_h, fmt, path, layout=layout)
+            write_ass_for_clip(_clip_words(clip), start, end, ow, oh, caps, tmp / "p.ass")
+            sub = "p.ass"
+        vf, _, _ = build_filter(src_w, src_h, fmt, path, layout=layout,
+                                subtitle_file=sub)
+        ffmpeg().render(video.get("path"), str(out), start, end, vf=vf,
+                        work_dir=str(tmp), encoder=str(exp.get("encoder", "auto")))
     except FFmpegError as exc:
         shutil.rmtree(tmp, ignore_errors=True)
         raise HTTPException(500, str(exc))
@@ -315,6 +369,21 @@ def caption_preview(body: CaptionPreviewBody):
 
     return StreamingResponse(stream(), media_type="video/mp4",
                              headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/formats")
+def formats() -> Dict[str, Any]:
+    """Aspect-ratio presets for the export picker."""
+    rf = CFG.section("reframe")
+    return {
+        "formats": [
+            {"id": key, "width": w, "height": h, "label": label, "platforms": plat}
+            for key, (w, h, label, plat) in FORMATS.items()
+        ],
+        "selected": rf.get("formats") or ["9:16"],
+        "layout": rf.get("layout", "crop"),
+        "tracking": subject_tracking_available(),
+    }
 
 
 @app.get("/api/fonts")

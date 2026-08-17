@@ -159,6 +159,22 @@
       </div>
     </div>
 
+    <div class="format-bar">
+      <div class="fb-label">
+        <strong>Export format</strong>
+        <span id="fb-tracking"></span>
+      </div>
+      <div class="format-pills" id="format-pills"></div>
+      <div class="fb-layout">
+        <label>Framing
+          <select id="rf-layout">
+            <option value="crop">Follow the subject (crop)</option>
+            <option value="fit_blur">Fit whole frame (blurred bed)</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
     <div class="clip-grid" id="clip-list"></div>
   </section>
 </main>
@@ -192,7 +208,8 @@
         </div>
         <div class="pv-actions">
           <button class="btn ghost small" id="btn-replay">↺ Replay</button>
-          <button class="btn ghost small" id="btn-captest" title="Render a few seconds with the captions burned in">🅐 Preview captions</button>
+          <select class="mini-select" id="pv-format" title="Preview this aspect ratio"></select>
+          <button class="btn ghost small" id="btn-captest" title="Render a few seconds exactly as it will be exported">👁 Preview export</button>
           <button class="btn ghost small" id="btn-transcode" title="Use if the video does not play natively">⟳ Transcode</button>
           <button class="btn ghost small" id="btn-cut-one">✂ Export this clip</button>
         </div>

@@ -9,3 +9,9 @@ requests>=2.31.0
 
 fastapi>=0.110.0
 uvicorn>=0.29.0
+
+# Subject detection for reframing 16:9 -> 9:16 / 4:5 / 1:1.
+# MUST stay below 5.0: OpenCV 5 removed CascadeClassifier and stopped shipping
+# the Haar cascade XMLs, which would silently downgrade reframing to a plain
+# centre crop. The <5 wheels bundle the cascades, so nothing is downloaded.
+opencv-python-headless>=4.9,<5

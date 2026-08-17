@@ -134,6 +134,19 @@ def cmd_check(args) -> int:
 
     print(f"Whisper model    : {cfg.get('whisper.model')} (device={cfg.get('whisper.device')})")
 
+    from app.video.reframe import subject_tracking_available
+    track = subject_tracking_available()
+    if track.get("ok"):
+        print(f"Subject tracking : OK (OpenCV {track.get('version')})")
+    else:
+        print("Subject tracking : UNAVAILABLE — exports will use a centre crop")
+        print(f"  ! {track.get('reason')}")
+    print(f"Export formats   : {', '.join(cfg.get('reframe.formats', ['9:16']))}"
+          f"  (framing: {cfg.get('reframe.layout', 'crop')})")
+    if ff.available():
+        print(f"GPU encoder      : "
+              f"{'h264_nvenc' if ff.has_encoder('h264_nvenc') else 'libx264 (CPU)'}")
+
     try:
         h = get_backend(cfg.section("llm")).health()
         status = "OK" if h.get("ok") and h.get("model_installed") is not False else "PROBLEM"

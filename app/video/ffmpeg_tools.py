@@ -206,6 +206,44 @@ class FFmpeg:
                         "-b:v", "0", "-pix_fmt", "yuv420p"]
         return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p"]
 
+    def render(self, src: str, out: str, start: float, end: float, *,
+               vf: str, work_dir: str, encoder: str = "auto") -> str:
+        """Re-encode [start, end] through an arbitrary filter chain.
+
+        Runs with cwd=work_dir so any file referenced inside the filter graph
+        (a subtitle file) can be a bare ASCII name - Windows paths contain ':'
+        and '\\', which are filtergraph syntax.
+        """
+        duration = max(0.2, end - start)
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        args = [
+            self.ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", f"{max(0.0, start):.3f}", "-i", str(Path(src).resolve()),
+            "-t", f"{duration:.3f}",
+            "-vf", vf,
+            *self.pick_encoder(encoder),
+            "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart",
+            str(Path(out).resolve()),
+        ]
+        proc = subprocess.run(args, capture_output=True, creationflags=_NO_WINDOW,
+                              cwd=str(work_dir))
+        target = Path(out)
+        wrote_nothing = (not target.exists()) or target.stat().st_size < 4096
+        if proc.returncode != 0 or wrote_nothing:
+            err = proc.stderr.decode("utf-8", "ignore")[-700:]
+            if "h264_nvenc" in " ".join(args):
+                return self.render(src, out, start, end, vf=vf, work_dir=work_dir,
+                                   encoder="libx264")
+            # Never leave a 0-byte file behind looking like a successful export.
+            if target.exists() and wrote_nothing:
+                try:
+                    target.unlink()
+                except OSError:
+                    pass
+            raise FFmpegError(f"Render failed: {err or 'no data was written'}")
+        return str(out)
+
     def burn(self, src: str, out: str, start: float, end: float, ass_path: str, *,
              encoder: str = "auto", fonts_dir: Optional[str] = None) -> str:
         """Cut [start, end] and burn an ASS subtitle file into the picture.

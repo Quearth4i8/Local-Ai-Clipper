@@ -3,6 +3,10 @@ from __future__ import annotations
 
 import gc
 import logging
+import math
+import shutil
+import tempfile
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from ..models import Transcript, Word
@@ -131,6 +135,9 @@ class WhisperEngine:
             result = self._transcribe(audio_path, language, duration_hint,
                                       on_progress, on_log)
 
+        if self.cfg.get("fill_gaps", True) and result.raw_segments:
+            self._fill_gaps(audio_path, result, on_log=on_log)
+
         # Silero VAD occasionally rejects an entire file - heavily compressed
         # audio, loud background music, unusual mic processing. If it left us
         # with nothing, try again with VAD off before declaring defeat.
@@ -143,6 +150,89 @@ class WhisperEngine:
             result = self._transcribe(audio_path, language, duration_hint,
                                       on_progress, on_log)
         return result
+
+    def _fill_gaps(self, audio_path: str, transcript: Transcript,
+                   on_log: Optional[Callable[[str], None]] = None) -> None:
+        """Re-listen to stretches Whisper returned nothing for.
+
+        Whisper sometimes skips a passage outright - measured on real footage:
+        large-v3-turbo dropped 6.6 seconds of clear dialogue that `small`
+        transcribed fine. The clip then plays with no captions over someone
+        talking. So any silent-in-the-transcript stretch that is NOT silent in
+        the audio gets transcribed again on its own, where there is no
+        surrounding context for the model to run away from.
+        """
+        min_gap = float(self.cfg.get("gap_min_seconds", 2.5))
+        noise_floor = float(self.cfg.get("gap_noise_db", -38.0))
+        gaps = find_speech_gaps(transcript.raw_segments, transcript.duration, min_gap)
+        if not gaps:
+            return
+        try:
+            samples, rate = _read_wav_mono16(audio_path)
+        except Exception:  # noqa: BLE001
+            return
+        if samples is None or not rate:
+            return
+
+        loud = [(a, b) for a, b in gaps if _rms_db(samples, rate, a, b) > noise_floor]
+        if not loud:
+            return
+        if on_log:
+            total = sum(b - a for a, b in loud)
+            on_log(f"Re-listening to {len(loud)} silent stretch(es) "
+                   f"({total:.0f}s) that still have audio in them")
+
+        model = self.load(on_log=on_log)
+        recovered: List[Dict[str, Any]] = []
+        tmp_dir = Path(tempfile.mkdtemp(prefix="gapfill_"))
+        try:
+            for n, (a, b) in enumerate(loud[:40]):     # bounded: this costs time
+                piece = tmp_dir / f"g{n}.wav"
+                pad = 0.20                              # a hair of lead-in helps
+                if not _slice_wav(audio_path, str(piece), max(0.0, a - pad), b + pad):
+                    continue
+                try:
+                    segs, _ = model.transcribe(
+                        str(piece),
+                        language=transcript.language,
+                        beam_size=int(self.cfg.get("beam_size", 5)),
+                        word_timestamps=bool(self.cfg.get("word_timestamps", True)),
+                        condition_on_previous_text=False,
+                        vad_filter=False,     # the window is already known to be loud
+                    )
+                    offset = max(0.0, a - pad)
+                    for seg in segs:
+                        if _is_hallucination(seg):
+                            continue
+                        words = []
+                        for w in (getattr(seg, "words", None) or []):
+                            text = (w.word or "").strip()
+                            if text:
+                                words.append({"start": float(w.start) + offset,
+                                              "end": float(w.end) + offset,
+                                              "text": text,
+                                              "prob": float(getattr(w, "probability", 1.0) or 1.0)})
+                        recovered.append({
+                            "start": float(seg.start) + offset,
+                            "end": float(seg.end) + offset,
+                            "text": (seg.text or "").strip(),
+                            "words": words,
+                            "no_speech_prob": float(getattr(seg, "no_speech_prob", 0.0) or 0.0),
+                            "avg_logprob": float(getattr(seg, "avg_logprob", 0.0) or 0.0),
+                            "recovered": True,
+                        })
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("gap fill failed for %.1f-%.1f: %s", a, b, exc)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        if recovered:
+            words = sum(len(s["words"]) for s in recovered)
+            transcript.raw_segments.extend(recovered)
+            transcript.raw_segments.sort(key=lambda s: s["start"])
+            if on_log:
+                on_log(f"Recovered {words} word(s) in {len(recovered)} segment(s) "
+                       "Whisper had skipped")
 
     def _transcribe(
         self,
@@ -215,6 +305,61 @@ class WhisperEngine:
 
 def words_from_segment(seg: Dict[str, Any]) -> List[Word]:
     return [Word(**w) for w in seg.get("words", [])]
+
+
+# ---------------------------------------------------------------------------
+# Gap filling
+# ---------------------------------------------------------------------------
+def _read_wav_mono16(path: str):
+    """Read a 16-bit mono WAV into a numpy array. Whisper's input format."""
+    import wave
+    import numpy as np
+    with wave.open(path, "rb") as wf:
+        if wf.getsampwidth() != 2 or wf.getnchannels() != 1:
+            return None, 0
+        rate = wf.getframerate()
+        data = np.frombuffer(wf.readframes(wf.getnframes()), dtype="<i2")
+    return data, rate
+
+
+def _rms_db(samples, rate: int, start: float, end: float) -> float:
+    import numpy as np
+    a = max(0, int(start * rate))
+    b = min(len(samples), int(end * rate))
+    if b - a < rate // 10:
+        return -120.0
+    chunk = samples[a:b].astype("float32") / 32768.0
+    rms = float(np.sqrt(np.mean(chunk * chunk))) or 1e-9
+    return 20.0 * math.log10(rms)
+
+
+def find_speech_gaps(raw: List[Dict[str, Any]], duration: float,
+                     min_gap: float) -> List[tuple]:
+    """Stretches with no transcript at all, long enough to hide real speech."""
+    gaps: List[tuple] = []
+    prev_end = 0.0
+    for seg in sorted(raw, key=lambda s: s["start"]):
+        if seg["start"] - prev_end >= min_gap:
+            gaps.append((prev_end, seg["start"]))
+        prev_end = max(prev_end, seg["end"])
+    if duration - prev_end >= min_gap:
+        gaps.append((prev_end, duration))
+    return gaps
+
+
+def _slice_wav(src: str, dst: str, start: float, end: float) -> bool:
+    import wave
+    with wave.open(src, "rb") as wf:
+        rate = wf.getframerate()
+        wf.setpos(min(wf.getnframes(), max(0, int(start * rate))))
+        frames = wf.readframes(max(0, int((end - start) * rate)))
+        params = wf.getparams()
+    if not frames:
+        return False
+    with wave.open(dst, "wb") as out:
+        out.setparams(params)
+        out.writeframes(frames)
+    return True
 
 
 # Phrases Whisper famously emits over music, silence and background noise.

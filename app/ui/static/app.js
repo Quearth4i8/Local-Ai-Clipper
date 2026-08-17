@@ -11,9 +11,26 @@ const api = async (url, opts = {}) => {
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { detail: text }; }
-  if (!res.ok) throw new Error((data && data.detail) || `HTTP ${res.status}`);
+  if (!res.ok) throw new Error(errorText(data, res.status));
   return data;
 };
+
+/* FastAPI returns 422 `detail` as an ARRAY of objects. Passing that straight to
+   new Error() stringifies it to "[object Object]", which tells you nothing. */
+function errorText(data, status) {
+  const d = data && data.detail;
+  if (typeof d === 'string' && d) return d;
+  if (Array.isArray(d)) {
+    const parts = d.map((e) => {
+      const where = Array.isArray(e.loc) ? e.loc.filter((x) => x !== 'body').join('.') : '';
+      const got = e.input !== undefined ? ` (got ${JSON.stringify(e.input)})` : '';
+      return `${where ? where + ': ' : ''}${e.msg || 'invalid'}${got}`;
+    });
+    return `Invalid request — ${parts.join('; ')}`;
+  }
+  if (d && typeof d === 'object') return JSON.stringify(d);
+  return `HTTP ${status}`;
+}
 
 const state = {
   video: null,
@@ -310,6 +327,7 @@ function renderResults(result) {
 
   $('clip-list').innerHTML = state.clips.map(clipCard).join('');
   wireClipCards();
+  loadFormats().then(refreshSelCount);
   refreshSelCount();
   $('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -382,10 +400,14 @@ const clipOf = (rank) => state.clips.find((c) => c.rank === rank);
 function refreshSelCount() {
   const n = state.selected.size;
   const total = state.clips.length;
+  const f = state.formats ? state.formats.size : 1;
   $('sel-count').textContent = n === total ? `All ${total} selected` : `${n} of ${total} selected`;
   $('sel-all').checked = n === total && total > 0;
   $('sel-all').indeterminate = n > 0 && n < total;
   $('btn-cut').disabled = n === 0;
+  $('btn-cut').textContent = f > 1
+    ? `✂ Export ${n} clips × ${f} formats`
+    : `✂ Export ${n} clip${n === 1 ? '' : 's'}`;
 }
 
 $('sel-all').onchange = (e) => {
@@ -397,6 +419,61 @@ $('sel-all').onchange = (e) => {
   });
   refreshSelCount();
 };
+
+/* ---------------------------------------------------------- format picker */
+const PLATFORM_ICON = { '9:16': '📱', '4:5': '🖼', '1:1': '⬛', '16:9': '🖥' };
+
+async function loadFormats() {
+  try {
+    const f = await api('/api/formats');
+    // Only trust ids the server actually offers - anything else would round-trip
+    // back on export and be rejected.
+    const known = new Set(f.formats.map((x) => x.id));
+    const picked = (f.selected || []).map(String).filter((x) => known.has(x));
+    state.formats = new Set(picked.length ? picked : ['9:16']);
+    $('format-pills').innerHTML = f.formats.map((x) => `
+      <label class="fpill ${state.formats.has(x.id) ? 'on' : ''}" data-fmt="${esc(x.id)}">
+        <input type="checkbox" ${state.formats.has(x.id) ? 'checked' : ''}>
+        <span class="shape" data-r="${esc(x.id)}"></span>
+        <span>
+          <b>${PLATFORM_ICON[x.id] || ''} ${esc(x.label)} · ${esc(x.id)}</b>
+          <small>${esc(x.platforms)} · ${x.width}×${x.height}</small>
+        </span>
+      </label>`).join('');
+    $('format-pills').querySelectorAll('.fpill').forEach((el) => {
+      el.onclick = (e) => {
+        e.preventDefault();
+        const id = el.dataset.fmt;
+        if (state.formats.has(id)) {
+          if (state.formats.size === 1) { toast('Keep at least one format', 'info', 2500); return; }
+          state.formats.delete(id);
+        } else state.formats.add(id);
+        el.classList.toggle('on', state.formats.has(id));
+        el.querySelector('input').checked = state.formats.has(id);
+        refreshSelCount();
+        saveFormats();
+      };
+    });
+    $('rf-layout').value = f.layout || 'crop';
+    $('rf-layout').onchange = saveFormats;
+    $('pv-format').innerHTML = f.formats
+      .map((x) => `<option value="${esc(x.id)}">${esc(x.id)} · ${esc(x.label)}</option>`).join('');
+
+    const t = f.tracking || {};
+    $('fb-tracking').textContent = t.ok
+      ? 'Subject tracking on — the crop follows the speaker'
+      : (t.reason || 'Centre crop only');
+    $('fb-tracking').className = t.ok ? '' : 'warn';
+  } catch { /* leave defaults */ }
+}
+
+function saveFormats() {
+  api('/api/config', {
+    method: 'POST',
+    body: { config: { reframe: { formats: [...state.formats], layout: $('rf-layout').value } },
+            save: true },
+  }).catch(() => {});
+}
 
 /* ---------------------------------------------------------------- preview */
 const video = $('video-el');
@@ -504,12 +581,15 @@ $('btn-captest').onclick = async () => {
   if (!rank) return;
   const btn = $('btn-captest');
   const label = btn.textContent;
+  const fmt = $('pv-format').value || '9:16';
   btn.disabled = true; btn.textContent = 'Rendering…';
-  $('pv-hint').textContent = 'Burning captions into a 6-second sample…';
+  $('pv-hint').textContent = `Rendering a 6-second ${fmt} sample exactly as it will export…`;
   try {
     const res = await fetch('/api/caption_preview', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ job_id: state.jobId, rank, seconds: 6 }),
+      body: JSON.stringify({ job_id: state.jobId, rank, seconds: 6, format: fmt,
+                             layout: $('rf-layout').value,
+                             captions: $('opt-captions').checked }),
     });
     if (!res.ok) throw new Error((await res.text()).slice(0, 300));
     const blob = await res.blob();
@@ -520,7 +600,8 @@ $('btn-captest').onclick = async () => {
     video.src = state.capUrl;
     video.load();
     video.play().catch(() => {});
-    $('pv-hint').textContent = 'Caption style sample. Adjust it in Settings → Animated captions.';
+    $('pv-hint').textContent = `${fmt} export sample — this is exactly what the file will `
+      + 'look like. Framing is set above the grid, caption style in Settings.';
   } catch (e) {
     $('pv-hint').textContent = '';
     toast(`Caption preview failed: ${e.message}`, 'err', 9000);
@@ -550,21 +631,24 @@ $('btn-cut').onclick = () => cutClips([...state.selected], $('btn-cut'));
 async function cutClips(ranks, btn) {
   if (!ranks.length) { toast('No clips selected', 'info'); return; }
   const withCaptions = $('opt-captions').checked;
+  const formats = state.formats ? [...state.formats] : ['9:16'];
   const label = btn.textContent;
+  const jobs = ranks.length * formats.length;
   btn.disabled = true;
-  btn.textContent = withCaptions ? `Burning captions ${ranks.length}…` : `Cutting ${ranks.length}…`;
-  if (withCaptions) {
-    toast('Burning captions re-encodes the video — this takes longer than a plain cut.',
-      'info', 5000);
-  }
+  btn.textContent = `Rendering ${jobs}…`;
+  toast(`Rendering ${jobs} file(s): ${formats.join(', ')}`
+    + (withCaptions ? ' with captions' : '')
+    + '. Reframing analyses the video, so give it a moment.', 'info', 6000);
   try {
     const r = await api('/api/export_clips', {
-      method: 'POST', body: { job_id: state.jobId, ranks, captions: withCaptions },
+      method: 'POST',
+      body: { job_id: state.jobId, ranks, captions: withCaptions,
+              formats, layout: $('rf-layout').value },
     });
-    toast(`${r.clips.length} clip(s) written to ${r.folder}`, 'ok', 6000);
+    toast(`${r.clips.length} file(s) written to ${r.folder}`, 'ok', 6000);
     api('/api/open_folder', { method: 'POST', body: { path: r.folder } }).catch(() => {});
-  } catch (e) { toast(e.message, 'err', 8000); }
-  finally { btn.disabled = false; btn.textContent = label; }
+  } catch (e) { toast(e.message, 'err', 10000); }
+  finally { btn.disabled = false; btn.textContent = label; refreshSelCount(); }
 }
 
 /* ---------------------------------------------------------------- settings */

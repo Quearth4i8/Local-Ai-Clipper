@@ -5,7 +5,7 @@ general:
   ffmpeg_path: ''
   ffprobe_path: ''
 whisper:
-  model: small
+  model: turbo
   device: auto
   compute_type: auto
   beam_size: 5
@@ -14,6 +14,13 @@ whisper:
   word_timestamps: true
   condition_on_previous_text: false
   cpu_threads: 0
+  # Whisper sometimes skips a passage entirely (measured: turbo dropped 6.6s of
+  # clear dialogue). That shows up as a clip with no captions over someone
+  # talking. Any stretch with no transcript but real audio is transcribed again
+  # on its own. Costs a little time, only for the gaps.
+  fill_gaps: true
+  gap_min_seconds: 2.5      # only investigate holes at least this long
+  gap_noise_db: -38.0       # ...that are louder than this (else it is silence)
 llm:
   backend: ollama
   model: qwen2.5:7b-instruct
@@ -60,13 +67,21 @@ export:
   padding_start: 0.15
   padding_end: 0.35
   encoder: auto
+reframe:
+  formats:
+  - '9:16'
+  layout: crop
+  sample_fps: 3.0
+  smooth: 0.35
+  move_threshold: 0.035
+  blur_strength: 28
 captions:
   enabled: true
   font: Arial Rounded MT Bold
   fonts_dir: assets/fonts
   font_size_ratio: 0.07
   base_color: '#ffffff'
-  highlight_color: '#44c520'
+  highlight_color: '#208ec5'
   outline_color: '#000000'
   highlight_outline_color: ''
   outline_ratio: 0.09

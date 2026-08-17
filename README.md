@@ -36,6 +36,50 @@ one-click FFmpeg cut of the selected clips — **with animated captions burned i
 
 ---
 
+## Vertical reframing (16:9 → TikTok / Reels / Shorts)
+
+Your source is probably 1920×1080. A centre crop to 9:16 is wrong most of the
+time, because the person talking is rarely in the middle of the frame. So the
+exporter **finds the subject and follows them**:
+
+1. The clip is sampled at 3 fps and each frame is scanned for faces (Haar
+   cascades bundled in the OpenCV wheel — **no model download**).
+2. Detections become a camera path: gaps hold the last known position rather
+   than snapping to centre, and smoothing **resets on a shot change** so the
+   crop cuts with the edit instead of sliding across the frame.
+3. A shot where the subject barely moves collapses to one **static** crop — a
+   locked-off frame looks deliberate, a drifting one looks broken.
+4. FFmpeg applies it as a single time-varying `crop` expression, then scales.
+
+Pick your formats above the clip grid — you can select several and get one file
+per format per clip:
+
+| Format | Size | For |
+|---|---|---|
+| **9:16** | 1080×1920 | TikTok · Reels · Shorts |
+| **4:5** | 1080×1350 | Instagram feed |
+| **1:1** | 1080×1080 | Facebook · LinkedIn |
+| **16:9** | 1920×1080 | Original · YouTube · X |
+
+**Framing** offers `Follow the subject (crop)` or `Fit whole frame (blurred bed)`
+— the latter keeps everything in shot, which is the right call when two people
+sit far apart and no crop can hold both.
+
+**👁 Preview export** in the clip detail view renders a 6-second sample *exactly*
+as it will be exported — right aspect, right framing, right captions — so you
+never render twelve clips to discover the crop was wrong.
+
+Measured on an RTX 3050 with a real 1080p vlog: tracking analysis **2.3 s** for a
+30-second clip (94% face-detection coverage, 21 shot changes found), render
+**2.0 s** via NVENC. One clip in all four formats with captions: **12 s** total.
+
+> Reframing needs `opencv-python-headless<5`. OpenCV 5.0 removed
+> `CascadeClassifier` *and* the bundled cascade XMLs, so on 5.x the app falls
+> back to a centre crop and says so in the format bar. The pin in
+> `requirements-core.txt` handles this.
+
+---
+
 ## Animated captions
 
 The exported clips can carry word-by-word highlight captions: the phrase sits in
@@ -474,6 +518,35 @@ Open the live log in the progress panel. Usually the model isn't installed, or
 Browsers only decode MP4-H.264/AAC and WebM natively. For MKV, HEVC or AV1 press
 **⟳ Transcoded preview** — FFmpeg transcodes just that section on the fly.
 
+**Reframing just centre-crops and misses the speaker**
+The format bar says why. Almost always OpenCV 5.x, which dropped
+`CascadeClassifier` and the cascade XMLs:
+`pip install "opencv-python-headless<5"`. Check with `main.py check`.
+
+**"Render failed: Failed to configure input pad on Parsed_crop_0" / error -22**
+Fixed. The moving crop is one FFmpeg expression, and libavutil's expression
+parser has a fixed stack (`STACK_SIZE 100` in `eval.c`). Measured against this
+build: **98 operands is the maximum** — nested `if()`s and a flat sum both die
+past it with `EINVAL(-22)`. A fast-cut vlog can produce 120+ camera moves, which
+blew that limit. The camera path is now capped at `MAX_PATH_SEGMENTS = 80`
+(a framing change every 0.75s in a 60s clip, well beyond what reads as motion),
+with near-identical neighbouring crops merged first. Verified rendering with
+raw paths of up to 2000 segments.
+
+**The crop drifts around / feels seasick**
+Raise `reframe.move_threshold` (more shots collapse to a static crop) or lower
+`reframe.smooth` (lazier camera). For talking heads that barely move, a large
+`move_threshold` and a locked frame usually looks best.
+
+**Two people in shot and the crop keeps picking one**
+That is unavoidable with a 9:16 crop — there is not enough width for both.
+Switch **Framing** to `Fit whole frame (blurred bed)`.
+
+**"An analysis is already running"**
+Only one analysis runs at a time on purpose: Whisper and the LLM each want the
+whole GPU, and two at once on 8 GB is slower than running them in sequence.
+Cancel the running one or wait.
+
 **Captions show the wrong font / fall back to something plain**
 libass matches on the font's **family name**, not the filename. Check the exact
 name in Settings → Animated captions → Font (the dropdown only lists fonts that
@@ -496,11 +569,32 @@ short pause between phrases, and both drew at the same position.
 font size and margins). Set a number to override it. A word count alone is not
 enough — four long words are far wider than four short ones.
 
-**Words missing from the captions**
-The caption layer never drops a transcribed word (there is one caption event per
-word, asserted in the tests). If text is missing, Whisper did not transcribe it:
-try `whisper.model: turbo`, which handles background music and fast speech much
-better than `small`.
+**Words missing from the captions / a stretch of speech with no text**
+The caption layer never drops a transcribed word (one caption event per word,
+asserted in the tests). Missing text means Whisper skipped it — which it does
+occasionally, mid-file, for no obvious reason. Measured on real footage:
+`turbo` dropped **6.6 seconds** of clear dialogue that `small` transcribed fine.
+
+`whisper.fill_gaps` (on by default) catches this: any stretch that is silent in
+the transcript but **not** silent in the audio is transcribed again on its own.
+On the measured case it recovered 20 words in 6 segments and closed the hole.
+
+Transcripts are cached with a version tag, so this improvement is not masked by
+an older cached transcript — the first run after upgrading re-transcribes.
+
+**The crop stutters / "frames lag"**
+Was a real bug, fixed. Shot-change detection used a fixed threshold on
+frame-to-frame difference, which measures *motion*, not edits: on handheld vlog
+footage it flagged **175 cuts in 68 seconds** (86% of samples), resetting the
+camera smoothing constantly and jittering the crop at 3 Hz. The threshold is now
+relative to how much that particular clip normally changes, it gives up on cut
+detection entirely if the result is implausible, a missing detection now **holds**
+position instead of snapping to the global average, and segments shorter than
+`0.45s` are absorbed. Same clip after: **0 hard jumps**.
+
+Clips where the subject is visible in under 35% of frames (action montages, wide
+shots) now get a single static crop at the median subject position — a guessed
+camera that moves looks far worse than one that holds still.
 
 **Captions are too big / too small / cover the subject**
 `captions.font_size_ratio` is a fraction of the *smaller* video side, so it

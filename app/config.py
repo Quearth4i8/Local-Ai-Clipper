@@ -29,6 +29,12 @@ DEFAULTS: Dict[str, Any] = {
         "word_timestamps": True,
         "condition_on_previous_text": False,
         "cpu_threads": 0,
+        # Re-listen to stretches Whisper returned nothing for but that still
+        # have audio in them. Whisper (turbo especially) sometimes skips whole
+        # passages, which shows up as a clip with no captions over speech.
+        "fill_gaps": True,
+        "gap_min_seconds": 2.5,
+        "gap_noise_db": -38.0,
     },
     "llm": {
         "backend": "ollama",
@@ -80,6 +86,15 @@ DEFAULTS: Dict[str, Any] = {
         "padding_start": 0.15,
         "padding_end": 0.35,
         "encoder": "auto",
+    },
+    "reframe": {
+        # Which aspect ratios "Export video clips" produces.
+        "formats": ["9:16"],
+        "layout": "crop",        # crop = track the subject | fit_blur = whole frame on a blurred bed
+        "sample_fps": 3.0,       # frames per second analysed for the subject
+        "smooth": 0.35,          # 0..1, higher = snappier camera
+        "move_threshold": 0.035, # below this the shot gets one static crop
+        "blur_strength": 28,
     },
     "captions": {
         "enabled": True,
@@ -196,6 +211,24 @@ class Config:
         scoring.weights in particular must only ever hold the six known keys
         with numeric values.
         """
+        # reframe.formats must be a non-empty list of known aspect-ratio ids.
+        # A stray value here reaches the browser and then fails request
+        # validation on export, which is a confusing way to find a typo.
+        rf = self.data.get("reframe")
+        if isinstance(rf, dict):
+            from .video.reframe import FORMATS
+            raw = rf.get("formats")
+            if not isinstance(raw, list):
+                raw = [raw]
+            clean: list = []
+            for item in raw:
+                key = str(item).strip()
+                if key in FORMATS and key not in clean:
+                    clean.append(key)
+            rf["formats"] = clean or list(DEFAULTS["reframe"]["formats"])
+            if str(rf.get("layout", "crop")) not in ("crop", "fit_blur"):
+                rf["layout"] = "crop"
+
         weights = self.data.get("scoring", {}).get("weights")
         if isinstance(weights, dict):
             clean = {}

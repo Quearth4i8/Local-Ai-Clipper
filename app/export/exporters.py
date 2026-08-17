@@ -13,6 +13,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from ..models import Word, fmt_ts
 from ..video.ffmpeg_tools import FFmpeg
+from ..video.reframe import (FORMATS, build_filter, format_spec, plan_reframe,
+                             safe_tag)
 from .captions import build_ass, words_in_range
 
 CSV_COLUMNS = ["rank", "start", "end", "start_tc", "end_tc", "duration", "score",
@@ -150,15 +152,22 @@ def export_clips(
     video_height: int = 0,
     encoder: str = "auto",
     fonts_dir: Optional[str] = None,
+    formats: Optional[Sequence[str]] = None,
+    layout: str = "crop",
+    sample_fps: float = 3.0,
     on_progress: Optional[Callable[[int, int, str], None]] = None,
+    on_log: Optional[Callable[[str], None]] = None,
 ) -> List[Dict[str, Any]]:
     stem = safe_stem(Path(video_path).stem)
     folder = Path(output_dir) / f"{stem}_clips"
     folder.mkdir(parents=True, exist_ok=True)
     burn_captions = bool(captions and captions.get("enabled"))
+    wanted = [f for f in (formats or ["16:9"]) if f in FORMATS] or ["16:9"]
 
     written: List[Dict[str, Any]] = []
-    total = len(clips)
+    total = len(clips) * len(wanted)
+    step = 0
+
     for n, clip in enumerate(clips, start=1):
         rank = clip.get("rank", n)
         start = max(0.0, float(clip["start"]) - pad_start)
@@ -166,29 +175,56 @@ def export_clips(
         if video_duration:
             end = min(end, video_duration)
         title = safe_stem(str(clip.get("title", "")).strip(), 40) or clip.get("type", "clip")
-        out = folder / f"clip_{int(rank):02d}_{title}.mp4"
-        if on_progress:
-            on_progress(n, total, out.name)
-
         words = _clip_words(clip)
-        if burn_captions and words:
-            # Build the subtitle in a temp dir, not next to the exports: a failed
-            # burn used to leave a stray .ass sitting in the output folder.
-            tmp = Path(tempfile.mkdtemp(prefix="clipcap_"))
+
+        for fmt in wanted:
+            step += 1
+            tag = safe_tag(fmt)
+            out = folder / f"clip_{int(rank):02d}_{title}_{tag}.mp4"
+            if on_progress:
+                on_progress(step, total, out.name)
+
+            native = fmt == "16:9" and abs((video_width or 1920) / (video_height or 1080)
+                                           - 16 / 9) < 0.02
+            # Fast path: original aspect, no captions -> lossless stream copy.
+            if native and not (burn_captions and words):
+                ff.cut(video_path, str(out), start, end, mode=mode, crf=crf, preset=preset)
+                written.append(_record(rank, out, start, end, fmt, False, layout))
+                continue
+
+            path = plan_reframe(ff.ffmpeg, video_path, start, end, fmt,
+                                video_width, video_height, layout=layout,
+                                sample_fps=sample_fps, on_log=on_log)
+            tmp = Path(tempfile.mkdtemp(prefix="clipfmt_"))
             try:
-                ass_path = write_ass_for_clip(words, start, end, video_width,
-                                              video_height, captions, tmp / "c.ass")
-                ff.burn(video_path, str(out), start, end, str(ass_path),
-                        encoder=encoder, fonts_dir=fonts_dir)
+                sub_name = None
+                if burn_captions and words:
+                    # Captions must be built for the OUTPUT size, not the source:
+                    # font size and margins are ratios of the final frame.
+                    _, out_w, out_h = build_filter(video_width, video_height, fmt,
+                                                   path, layout=layout)
+                    write_ass_for_clip(words, start, end, out_w, out_h,
+                                       captions, tmp / "c.ass")
+                    sub_name = "c.ass"
+                vf, _, _ = build_filter(video_width, video_height, fmt, path,
+                                        layout=layout, subtitle_file=sub_name)
+                ff.render(video_path, str(out), start, end, vf=vf,
+                          work_dir=str(tmp), encoder=encoder)
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
-        else:
-            ff.cut(video_path, str(out), start, end, mode=mode, crf=crf, preset=preset)
 
-        written.append({"rank": rank, "path": str(out), "start": start, "end": end,
-                        "start_tc": fmt_ts(start), "end_tc": fmt_ts(end),
-                        "captions": bool(burn_captions and words)})
+            written.append(_record(rank, out, start, end, fmt,
+                                   bool(burn_captions and words), layout))
     return written
+
+
+def _record(rank: Any, out: Path, start: float, end: float, fmt: str,
+            captions: bool, layout: str) -> Dict[str, Any]:
+    w, h, label, platforms = format_spec(fmt)
+    return {"rank": rank, "path": str(out), "start": start, "end": end,
+            "start_tc": fmt_ts(start), "end_tc": fmt_ts(end),
+            "captions": captions, "format": fmt, "layout": layout,
+            "width": w, "height": h, "label": label, "platforms": platforms}
 
 
 def _clip_words(clip: Dict[str, Any]) -> List[Word]:

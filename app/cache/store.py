@@ -33,6 +33,9 @@ def fingerprint(path: str, sample_bytes: int = 4 * 1024 * 1024) -> str:
 # Sub-folders of cache/ that are not per-video entries.
 RESERVED_DIRS = {"models", "thumbs"}
 
+# Incremented when the transcription pipeline changes what it produces.
+TRANSCRIPT_VERSION = 2
+
 
 class CacheStore:
     def __init__(self, root: Path):
@@ -49,7 +52,10 @@ class CacheStore:
     def _transcript_key(whisper_model: str, language: str) -> str:
         safe = "".join(ch if ch.isalnum() or ch in "-._" else "_"
                        for ch in f"{whisper_model}_{language or 'auto'}")
-        return f"transcript_{safe}.json"
+        # Version tag: bump when transcription output changes materially, so an
+        # improved pass is not masked by an older cached transcript.
+        # v2 = gap-filling pass (recovers passages Whisper skipped).
+        return f"transcript_v{TRANSCRIPT_VERSION}_{safe}.json"
 
     # -------------------------------------------------------------- metadata
     def write_metadata(self, video_hash: str, info: VideoInfo,

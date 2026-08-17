@@ -37,6 +37,16 @@ whisper:
   condition_on_previous_text: false   # false = fewer hallucination loops
   cpu_threads: 0          # 0 = auto
 
+  # Whisper sometimes skips a whole passage. Measured on real footage: turbo
+  # dropped 6.6 seconds of clear dialogue that `small` transcribed fine, which
+  # shows up as a clip playing with no captions over someone talking. Any
+  # stretch that is silent in the transcript but NOT silent in the audio gets
+  # transcribed again on its own, with no surrounding context to run away from.
+  # Recovered 20 words in 6 segments on the measured case.
+  fill_gaps: true
+  gap_min_seconds: 2.5    # only investigate transcript holes at least this long
+  gap_noise_db: -38.0     # ...whose audio is louder than this, else it is silence
+
 # ----------------------------------------------------------------------------
 # LOCAL LLM
 # ----------------------------------------------------------------------------
@@ -107,7 +117,34 @@ export:
                           # Only used when captions are burned in.
 
 # ----------------------------------------------------------------------------
+# REFRAMING — 16:9 source into vertical/square, subject kept in frame.
+# Face detection uses the Haar cascades bundled in the OpenCV wheel, so nothing
+# is downloaded. Requires opencv-python-headless<5 — OpenCV 5.0 removed both
+# CascadeClassifier and the cascade XMLs, and without them this falls back to a
+# plain centre crop (which is usually wrong: speakers are rarely centred).
+# ----------------------------------------------------------------------------
+reframe:
+  formats: ['9:16']       # one output file per listed format
+                          #   9:16 -> TikTok / Reels / Shorts   (1080x1920)
+                          #   4:5  -> Instagram feed            (1080x1350)
+                          #   1:1  -> Facebook / LinkedIn       (1080x1080)
+                          #   16:9 -> original / YouTube        (1920x1080)
+  layout: crop            # crop     -> follow the speaker
+                          # fit_blur -> whole frame on a blurred bed of itself;
+                          #             use when two people sit far apart
+  sample_fps: 3.0         # frames/second analysed. Higher = tighter tracking,
+                          # slower planning. 3 is plenty for talking heads.
+  smooth: 0.35            # 0..1 exponential smoothing; higher follows faster.
+                          # Smoothing resets on a shot change so the crop jumps
+                          # on a cut instead of sliding across the frame.
+  move_threshold: 0.035   # if the subject moves less than this within a shot the
+                          # shot gets ONE static crop — a locked-off frame looks
+                          # deliberate, a slowly drifting one looks broken
+  blur_strength: 28       # fit_blur only
+
+# ----------------------------------------------------------------------------
 # ANIMATED CAPTIONS — word-by-word highlight, driven by Whisper word timestamps
+# Rendered at the OUTPUT resolution, so sizes follow the exported aspect ratio.
 # ----------------------------------------------------------------------------
 captions:
   enabled: true

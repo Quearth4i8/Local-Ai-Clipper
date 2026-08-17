@@ -115,6 +115,18 @@ class JobManager:
             self._jobs[job.id] = job
         return job
 
+    def active(self) -> Optional[Job]:
+        """A run already in flight, if any.
+
+        Whisper and the LLM both want the whole GPU; two analyses at once just
+        thrash an 8 GB card and take longer than running them back to back.
+        """
+        with self._lock:
+            for job in self._jobs.values():
+                if job.status in ("queued", "running"):
+                    return job
+        return None
+
     def get(self, job_id: str) -> Optional[Job]:
         with self._lock:
             return self._jobs.get(job_id)
