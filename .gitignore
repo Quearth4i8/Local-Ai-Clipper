@@ -1,0 +1,70 @@
+# ---------------------------------------------------------------- Python ---
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ------------------------------------------------------------ app runtime ---
+# Downloaded Whisper models (hundreds of MB), cached transcripts, thumbnails.
+# All of it is regenerated automatically on first run.
+cache/*
+!cache/.gitkeep
+
+# Exported JSON/CSV/TXT results and any clips cut with FFmpeg.
+output/*
+!output/.gitkeep
+
+# Temp audio FFmpeg streams out before transcription (normally auto-deleted).
+clipfinder_*.wav
+*.tmp
+
+# --------------------------------------------------------------- personal ---
+# config.yaml IS tracked - it ships as the documented default. If you want to
+# keep local tweaks out of git without untracking it, run:
+#   git update-index --skip-worktree config.yaml
+config.local.yaml
+*.local.yaml
+
+# ------------------------------------------------------------------ media ---
+# Never commit source videos or test renders.
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.webm
+*.flv
+*.wmv
+*.m4v
+*.ts
+*.mpg
+*.mpeg
+*.mp3
+*.wav
+*.m4a
+*.aac
+*.flac
+*.ogg
+*.opus
+
+# ---------------------------------------------------------------- editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ------------------------------------------------------------------- OS ----
+.DS_Store
+Thumbs.db
+desktop.ini

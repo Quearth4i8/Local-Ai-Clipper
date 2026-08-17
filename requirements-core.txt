@@ -1,0 +1,11 @@
+# Core dependencies - everything the app needs to run on the CPU.
+# GPU acceleration lives in requirements-cuda.txt and is installed separately by
+# install.bat, because those wheels are ~1 GB and are optional.
+
+faster-whisper>=1.0.3
+ctranslate2>=4.4.0
+PyYAML>=6.0.1
+requests>=2.31.0
+
+fastapi>=0.110.0
+uvicorn>=0.29.0

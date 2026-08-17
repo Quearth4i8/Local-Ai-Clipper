@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local AI Clip Finder</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>">
+</head>
+<body>
+
+<div id="drop-overlay"><div><span class="drop-icon">⬇</span><p>Drop the video anywhere</p></div></div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◎</span>
+    <div>
+      <h1>Local AI Clip Finder</h1>
+      <p class="tagline">Finds the gold moments. 100% offline.</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <div class="pills" id="status-pills">
+      <span class="pill loading" id="pill-ffmpeg">FFmpeg</span>
+      <span class="pill loading" id="pill-gpu">GPU</span>
+      <span class="pill loading" id="pill-llm">LLM</span>
+    </div>
+    <button class="icon-btn" id="btn-theme" title="Toggle theme">◐</button>
+    <button class="icon-btn" id="btn-settings" title="Settings">⚙</button>
+  </div>
+</header>
+
+<main>
+  <!-- ------------------------------------------------ STEP 1: pick a video -->
+  <section class="card picker" id="picker">
+    <div class="dropzone" id="dropzone">
+      <div class="dz-inner">
+        <div class="dz-icon">🎬</div>
+        <h2>Select a video to analyse</h2>
+        <p>Podcast, interview, stream, lecture — 5 minutes or 5 hours.</p>
+        <div class="dz-actions">
+          <button class="btn primary" id="btn-browse">Select video</button>
+          <span class="or">or paste a path</span>
+        </div>
+        <div class="path-row">
+          <input type="text" id="path-input" spellcheck="false"
+                 placeholder="C:\Users\you\Videos\podcast.mp4">
+          <button class="btn ghost" id="btn-load-path">Load</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="video-meta hidden" id="video-meta">
+      <div class="vm-head">
+        <div class="vm-title">
+          <span class="vm-icon">🎞</span>
+          <div>
+            <strong id="vm-name">—</strong>
+            <div class="vm-chips" id="vm-chips"></div>
+          </div>
+        </div>
+        <button class="btn ghost small" id="btn-change">Change</button>
+      </div>
+
+      <div class="analyze-row">
+        <div class="opt">
+          <label for="opt-count">Clips</label>
+          <input type="number" id="opt-count" min="1" max="40" value="12">
+        </div>
+        <div class="opt">
+          <label for="opt-min">Min s</label>
+          <input type="number" id="opt-min" min="5" max="180" value="20">
+        </div>
+        <div class="opt">
+          <label for="opt-max">Max s</label>
+          <input type="number" id="opt-max" min="10" max="300" value="90">
+        </div>
+        <div class="opt">
+          <label for="opt-lang">Language</label>
+          <select id="opt-lang">
+            <option value="auto">Auto-detect</option>
+            <option value="en">English</option>
+            <option value="fr">Français</option>
+            <option value="es">Español</option>
+            <option value="de">Deutsch</option>
+            <option value="ar">العربية</option>
+            <option value="it">Italiano</option>
+            <option value="pt">Português</option>
+          </select>
+        </div>
+        <label class="checkbox" title="Ignore the cached transcript and run Whisper again">
+          <input type="checkbox" id="opt-force"> Re-transcribe
+        </label>
+        <button class="btn primary big" id="btn-analyze">Analyse video</button>
+      </div>
+      <p class="cache-note hidden" id="cache-note">⚡ A cached transcript exists — analysis will skip Whisper.</p>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------- STEP 2: progress -->
+  <section class="card progress-card hidden" id="progress-card">
+    <div class="pg-head">
+      <div>
+        <h3 id="pg-stage">Starting…</h3>
+        <p id="pg-message">—</p>
+      </div>
+      <div class="pg-right">
+        <span class="pg-pct" id="pg-pct">0%</span>
+        <div class="pg-times">
+          <span class="pg-elapsed" id="pg-elapsed">0s</span>
+          <span class="pg-elapsed" id="pg-stage-elapsed"></span>
+        </div>
+        <button class="btn ghost small" id="btn-cancel">Cancel</button>
+      </div>
+    </div>
+    <div class="bar"><div class="bar-fill" id="pg-bar"></div></div>
+    <p class="pg-hint hidden" id="pg-hint"></p>
+    <pre class="pg-error hidden" id="pg-error"></pre>
+    <div class="steps" id="pg-steps"></div>
+    <details class="log-box">
+      <summary>Live log</summary>
+      <pre id="pg-log"></pre>
+    </details>
+  </section>
+
+  <!-- -------------------------------------------------------- STEP 3: results -->
+  <section class="results hidden" id="results">
+    <div class="results-head">
+      <div>
+        <h2>🔥 Best clips</h2>
+        <p id="res-summary">—</p>
+      </div>
+      <div class="res-actions">
+        <label class="checkbox"><input type="checkbox" id="sel-all"> Select all</label>
+        <div class="menu-wrap">
+          <button class="btn ghost" id="btn-export">Export ▾</button>
+          <div class="menu hidden" id="export-menu">
+            <button data-fmt="json">Download JSON</button>
+            <button data-fmt="csv">Download CSV</button>
+            <button data-fmt="txt">Download text</button>
+            <hr>
+            <button data-fmt="save">Save all to /output</button>
+          </div>
+        </div>
+        <button class="btn primary" id="btn-cut">✂ Export selected clips</button>
+      </div>
+    </div>
+
+    <div class="results-body">
+      <div class="clip-list" id="clip-list"></div>
+      <aside class="preview-pane" id="preview-pane">
+        <div class="pv-empty" id="pv-empty">
+          <div class="pv-icon">▶</div>
+          <p>Select a clip to preview it here.</p>
+        </div>
+        <div class="pv-player hidden" id="pv-player">
+          <video id="video-el" controls preload="metadata" playsinline></video>
+          <div class="pv-bar">
+            <div class="pv-range" id="pv-range"><div class="pv-cursor" id="pv-cursor"></div></div>
+          </div>
+          <div class="pv-info">
+            <strong id="pv-title">—</strong>
+            <span id="pv-time">—</span>
+          </div>
+          <div class="pv-actions">
+            <button class="btn ghost small" id="btn-replay">↺ Replay clip</button>
+            <button class="btn ghost small" id="btn-transcode" title="Use if the video does not play">⟳ Transcoded preview</button>
+          </div>
+          <p class="pv-hint" id="pv-hint"></p>
+        </div>
+      </aside>
+    </div>
+  </section>
+</main>
+
+<!-- ------------------------------------------------------------- settings -->
+<div class="modal hidden" id="settings-modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>Settings</h3>
+      <button class="icon-btn" id="btn-close-settings">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="settings-grid">
+        <fieldset>
+          <legend>Transcription</legend>
+          <label>Whisper model
+            <select id="set-whisper">
+              <option value="tiny">tiny — fastest, rough</option>
+              <option value="base">base</option>
+              <option value="small">small — recommended (3050)</option>
+              <option value="medium">medium — better punctuation</option>
+              <option value="turbo">large-v3-turbo — best quality/speed</option>
+              <option value="large-v3">large-v3 — slowest</option>
+            </select>
+          </label>
+          <label>Device
+            <select id="set-device">
+              <option value="auto">auto</option>
+              <option value="cuda">cuda</option>
+              <option value="cpu">cpu</option>
+            </select>
+          </label>
+          <label>Compute type
+            <select id="set-compute">
+              <option value="auto">auto</option>
+              <option value="float16">float16</option>
+              <option value="int8_float16">int8_float16</option>
+              <option value="int8">int8</option>
+            </select>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Local LLM</legend>
+          <label>Backend
+            <select id="set-backend">
+              <option value="ollama">Ollama</option>
+              <option value="openai_compatible">llama.cpp / LM Studio (OpenAI-compatible)</option>
+            </select>
+          </label>
+          <label>Model
+            <input list="model-list" id="set-model" spellcheck="false">
+            <datalist id="model-list"></datalist>
+          </label>
+          <label>Server URL
+            <input type="text" id="set-url" spellcheck="false">
+          </label>
+          <label>Context window
+            <input type="number" id="set-ctx" min="2048" max="131072" step="1024">
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Clip discovery</legend>
+          <label>Analysis block (s)<input type="number" id="set-block" min="120" max="1200" step="30"></label>
+          <label>Candidates per pass 1<input type="number" id="set-cap" min="10" max="200"></label>
+          <label>Boundary optimisation
+            <select id="set-boundary"><option value="true">on</option><option value="false">off</option></select>
+          </label>
+          <label>Diversity <span class="val" id="val-div">0.70</span>
+            <input type="range" id="set-div" min="0" max="1" step="0.05">
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Scoring weights (total 100)</legend>
+          <div class="weights" id="weights"></div>
+          <label>Heuristic blend <span class="val" id="val-blend">0.15</span>
+            <input type="range" id="set-blend" min="0" max="0.6" step="0.05">
+          </label>
+        </fieldset>
+      </div>
+
+      <div class="cache-block">
+        <div>
+          <strong>Transcript cache</strong>
+          <p id="cache-info">—</p>
+        </div>
+        <div>
+          <button class="btn ghost small" id="btn-open-cache">Open folder</button>
+          <button class="btn danger small" id="btn-clear-cache">Clear cache</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint">Saved to config.yaml</span>
+      <button class="btn primary" id="btn-save-settings">Save settings</button>
+    </div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

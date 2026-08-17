@@ -1,0 +1,65 @@
+general:
+  language: en
+  cache_dir: cache
+  output_dir: output
+  ffmpeg_path: ''
+  ffprobe_path: ''
+whisper:
+  model: small
+  device: auto
+  compute_type: auto
+  beam_size: 5
+  vad_filter: true
+  vad_min_silence_ms: 500
+  word_timestamps: true
+  condition_on_previous_text: false
+  cpu_threads: 0
+llm:
+  backend: ollama
+  model: qwen2.5:7b-instruct
+  base_url: http://127.0.0.1:11434
+  api_key: ''
+  temperature: 0.25
+  top_p: 0.9
+  num_ctx: 8192
+  max_tokens: 3072
+  request_timeout: 600
+  keep_alive: 10m
+  unload_after_analysis: true
+  use_json_schema: true
+  max_retries: 3
+clips:
+  min_duration: 20
+  max_duration: 90
+  target_count: 12
+  ideal_duration: 45
+  block_seconds: 420
+  block_overlap_seconds: 45
+  max_blocks: 0
+  max_candidates_pass1: 60
+  boundary_optimization: true
+  boundary_candidates: 20
+  boundary_context_sentences: 5
+  overlap_iou_threshold: 0.4
+  final_pool_size: 18
+  diversity_lambda: 0.7
+  min_gap_between_clips: 5
+scoring:
+  weights:
+    hook: 25
+    payoff: 25
+    emotion: 15
+    curiosity: 15
+    standalone: 10
+    editability: 10
+  heuristic_blend: 0.15
+export:
+  mode: copy
+  reencode_crf: 20
+  reencode_preset: veryfast
+  padding_start: 0.15
+  padding_end: 0.35
+server:
+  host: 127.0.0.1
+  port: 8420
+  open_browser: true

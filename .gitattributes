@@ -1,0 +1,26 @@
+# Normalise line endings in the repo, but check out Windows scripts as CRLF -
+# a .bat with LF endings can fail in odd ways on cmd.exe.
+* text=auto
+
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+*.ps1    text eol=crlf
+*.sh     text eol=lf
+
+*.py     text
+*.js     text
+*.css    text
+*.html   text
+*.md     text
+*.yaml   text
+*.yml    text
+*.txt    text
+
+# Never touch these
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.mp4    binary
+*.wav    binary

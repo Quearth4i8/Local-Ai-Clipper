@@ -1,0 +1,8 @@
+# Full install (CPU + GPU). install.bat installs these in two steps instead, so
+# that a stalled 1 GB CUDA download cannot abort the whole installation.
+#
+#   pip install -r requirements-core.txt      <- required
+#   pip install -r requirements-cuda.txt      <- optional, GPU transcription
+
+-r requirements-core.txt
+-r requirements-cuda.txt

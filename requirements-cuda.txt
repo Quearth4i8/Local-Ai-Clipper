@@ -1,0 +1,16 @@
+# OPTIONAL - GPU acceleration for faster-whisper.
+#
+# CTranslate2 needs cuBLAS + cuDNN 9. These wheels ship the DLLs, so you do NOT
+# need the CUDA Toolkit installed. app/transcription/cuda_setup.py finds them at
+# runtime. Roughly 1 GB total.
+#
+# If these fail to install, the app still works - Whisper just runs on the CPU.
+#
+#   .venv\Scripts\pip install -r requirements-cuda.txt
+
+# cuBLAS is the one that matters - installing only this is usually enough to get
+# Whisper running on the GPU.
+nvidia-cublas-cu12>=12.3.4.1
+
+# cuDNN is larger (~700 MB) and only needed by some models/compute types.
+nvidia-cudnn-cu12>=9.1.0.70
