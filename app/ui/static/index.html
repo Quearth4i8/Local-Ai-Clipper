@@ -88,12 +88,19 @@
             <option value="pt">Português</option>
           </select>
         </div>
-        <label class="checkbox" title="Ignore the cached transcript and run Whisper again">
-          <input type="checkbox" id="opt-force"> Re-transcribe
+        <label class="checkbox help" id="force-label">
+          <input type="checkbox" id="opt-force"> Force re-transcribe
+          <span class="help-dot" tabindex="0">?
+            <span class="help-bubble">Transcripts are cached per video, so re-running an
+            analysis normally skips Whisper entirely and takes seconds instead of minutes.
+            Tick this only if you changed the Whisper model or language, or you think the
+            transcript came out wrong — it throws the cache away and listens to the whole
+            video again.</span>
+          </span>
         </label>
         <button class="btn primary big" id="btn-analyze">Analyse video</button>
       </div>
-      <p class="cache-note hidden" id="cache-note">⚡ A cached transcript exists — analysis will skip Whisper.</p>
+      <p class="cache-note hidden" id="cache-note">⚡ Transcript already cached — analysis will skip Whisper and take seconds.</p>
     </div>
   </section>
 
@@ -126,17 +133,20 @@
   <!-- -------------------------------------------------------- STEP 3: results -->
   <section class="results hidden" id="results">
     <div class="results-head">
-      <div>
-        <h2>🔥 Best clips</h2>
+      <div class="rh-title">
+        <h2>Best clips</h2>
         <p id="res-summary">—</p>
       </div>
       <div class="res-actions">
-        <label class="checkbox"><input type="checkbox" id="sel-all"> Select all</label>
+        <label class="checkbox strong" title="Select or clear every clip">
+          <input type="checkbox" id="sel-all">
+          <span id="sel-count">0 selected</span>
+        </label>
         <label class="checkbox" title="Burn animated word-by-word captions into the exported clips">
           <input type="checkbox" id="opt-captions" checked> Captions
         </label>
         <div class="menu-wrap">
-          <button class="btn ghost" id="btn-export">Export ▾</button>
+          <button class="btn ghost" id="btn-export">Export data ▾</button>
           <div class="menu hidden" id="export-menu">
             <button data-fmt="json">Download JSON</button>
             <button data-fmt="csv">Download CSV</button>
@@ -145,37 +155,64 @@
             <button data-fmt="save">Save all to /output</button>
           </div>
         </div>
-        <button class="btn primary" id="btn-cut">✂ Export selected clips</button>
+        <button class="btn primary" id="btn-cut">✂ Export video clips</button>
       </div>
     </div>
 
-    <div class="results-body">
-      <div class="clip-list" id="clip-list"></div>
-      <aside class="preview-pane" id="preview-pane">
-        <div class="pv-empty" id="pv-empty">
-          <div class="pv-icon">▶</div>
-          <p>Select a clip to preview it here.</p>
-        </div>
-        <div class="pv-player hidden" id="pv-player">
-          <video id="video-el" controls preload="metadata" playsinline></video>
-          <div class="pv-bar">
-            <div class="pv-range" id="pv-range"><div class="pv-cursor" id="pv-cursor"></div></div>
-          </div>
-          <div class="pv-info">
-            <strong id="pv-title">—</strong>
-            <span id="pv-time">—</span>
-          </div>
-          <div class="pv-actions">
-            <button class="btn ghost small" id="btn-replay">↺ Replay clip</button>
-            <button class="btn ghost small" id="btn-captest" title="Render a few seconds with the captions burned in">🅐 Preview captions</button>
-            <button class="btn ghost small" id="btn-transcode" title="Use if the video does not play">⟳ Transcoded preview</button>
-          </div>
-          <p class="pv-hint" id="pv-hint"></p>
-        </div>
-      </aside>
-    </div>
+    <div class="clip-grid" id="clip-list"></div>
   </section>
 </main>
+
+<!-- ------------------------------------------------------- clip detail modal -->
+<div class="modal hidden" id="player-modal">
+  <div class="modal-card player-card">
+    <div class="modal-head">
+      <div class="pm-head">
+        <span class="rank" id="pv-rank">#1</span>
+        <div>
+          <strong id="pv-title">—</strong>
+          <div class="clip-sub">
+            <span class="tc" id="pv-time">—</span>
+            <span class="type-chip" id="pv-type"></span>
+            <span id="pv-score-text"></span>
+          </div>
+        </div>
+      </div>
+      <div class="pm-nav">
+        <button class="icon-btn" id="btn-prev-clip" title="Previous clip">↑</button>
+        <button class="icon-btn" id="btn-next-clip" title="Next clip">↓</button>
+        <button class="icon-btn" id="btn-close-player" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+    <div class="player-body">
+      <div class="player-left">
+        <video id="video-el" controls preload="metadata" playsinline></video>
+        <div class="pv-bar">
+          <div class="pv-range" id="pv-range"><div class="pv-cursor" id="pv-cursor"></div></div>
+        </div>
+        <div class="pv-actions">
+          <button class="btn ghost small" id="btn-replay">↺ Replay</button>
+          <button class="btn ghost small" id="btn-captest" title="Render a few seconds with the captions burned in">🅐 Preview captions</button>
+          <button class="btn ghost small" id="btn-transcode" title="Use if the video does not play natively">⟳ Transcode</button>
+          <button class="btn ghost small" id="btn-cut-one">✂ Export this clip</button>
+        </div>
+        <p class="pv-hint" id="pv-hint"></p>
+      </div>
+      <div class="player-right">
+        <div class="bars" id="pv-bars"></div>
+        <div class="reason" id="pv-reason"></div>
+        <div class="verdict hidden" id="pv-verdict"></div>
+        <div class="pv-transcript">
+          <div class="pv-tr-head">
+            <span>Transcript</span>
+            <button class="btn ghost small" id="btn-copy-text">⧉ Copy</button>
+          </div>
+          <p id="pv-text"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ------------------------------------------------------------- settings -->
 <div class="modal hidden" id="settings-modal">

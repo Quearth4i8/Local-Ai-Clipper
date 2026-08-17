@@ -1,0 +1,162 @@
+# ============================================================================
+#  LOCAL AI CLIP FINDER — annotated reference configuration
+#
+#  This file is DOCUMENTATION ONLY. The app reads config.yaml.
+#  It exists because saving from the Settings panel rewrites config.yaml with
+#  PyYAML, which drops comments — so the explanations live here instead.
+#
+#  To use any value below: copy the key into config.yaml, or set it in Settings.
+#  Everything runs on your machine. No API keys, no cloud.
+#  Defaults are tuned for: NVIDIA RTX 3050 / 8 GB VRAM / Windows
+# ============================================================================
+
+general:
+  language: auto          # auto | en | fr | ar | es | de ... (auto = Whisper detects)
+  cache_dir: cache
+  output_dir: output
+  ffmpeg_path: ''         # empty = find ffmpeg on PATH (or the winget install)
+  ffprobe_path: ''
+
+# ----------------------------------------------------------------------------
+# TRANSCRIPTION (faster-whisper / CTranslate2)
+# ----------------------------------------------------------------------------
+whisper:
+  # tiny | base | small | medium | turbo | large-v3
+  #   small  -> fastest usable, ~1 GB VRAM. Default.
+  #   medium -> better punctuation, so better clip edges. ~2.8 GB
+  #   turbo  -> best quality/speed ratio. ~4 GB. Best word-timestamp accuracy,
+  #             and much better on background music or fast speech.
+  model: small
+  device: auto            # auto | cuda | cpu
+  compute_type: auto      # auto | float16 | int8_float16 | int8 | float32
+  beam_size: 5
+  vad_filter: true        # KEEP THIS ON. Measured: turning it off made word
+                          # timestamps worse (spread 226ms -> 258ms).
+  vad_min_silence_ms: 500
+  word_timestamps: true   # required for clip boundaries AND for captions
+  condition_on_previous_text: false   # false = fewer hallucination loops
+  cpu_threads: 0          # 0 = auto
+
+# ----------------------------------------------------------------------------
+# LOCAL LLM
+# ----------------------------------------------------------------------------
+llm:
+  backend: ollama         # ollama | openai_compatible (llama.cpp, LM Studio, vLLM)
+  # Models that fit 8 GB VRAM:
+  #   qwen2.5:7b-instruct            (~4.7 GB)  best default, great JSON
+  #   llama3.1:8b-instruct-q4_K_M    (~4.9 GB)  strong English
+  #   mistral-nemo:12b-instruct-q4_K_M (~7 GB)  best French; drop num_ctx to 4096
+  #   qwen2.5:3b-instruct            (~2.0 GB)  2-3x faster, blunter judgement
+  model: qwen2.5:7b-instruct
+  base_url: http://127.0.0.1:11434   # openai_compatible: http://127.0.0.1:8080/v1
+  api_key: ''             # local servers don't need one
+  temperature: 0.25
+  top_p: 0.9
+  num_ctx: 8192           # lower to 4096 if you hit VRAM limits
+  max_tokens: 3072
+  request_timeout: 600
+  keep_alive: 10m         # how long Ollama holds the model in VRAM
+  unload_after_analysis: true
+  use_json_schema: true   # schema-constrained output where the backend supports it
+  max_retries: 3
+
+# ----------------------------------------------------------------------------
+# CLIP DISCOVERY
+# ----------------------------------------------------------------------------
+clips:
+  min_duration: 20        # seconds
+  max_duration: 90
+  target_count: 12        # how many clips you want back
+  ideal_duration: 45      # soft preference only
+  block_seconds: 420      # transcript analysed in ~7 min blocks (pass 1)
+  block_overlap_seconds: 45   # so moments on a seam aren't lost
+  max_blocks: 0           # 0 = analyse the whole video
+  max_candidates_pass1: 60
+  boundary_optimization: true
+  boundary_candidates: 20     # how many top candidates get boundary-tuned
+  boundary_context_sentences: 5
+  overlap_iou_threshold: 0.4  # above this, two candidates are the same moment
+  final_pool_size: 18         # how many enter the pass-2 head-to-head
+  diversity_lambda: 0.7       # 1.0 = pure score, 0.0 = pure variety
+  min_gap_between_clips: 5    # seconds of separation in the final list
+
+# ----------------------------------------------------------------------------
+# SCORING (weights must be the six keys below; anything else is discarded)
+# ----------------------------------------------------------------------------
+scoring:
+  weights:
+    hook: 25          # does the first 3 seconds grab you
+    payoff: 25        # does it actually deliver something
+    emotion: 15       # does it make you feel anything
+    curiosity: 15     # do you need to know what happens next
+    standalone: 10    # does it work without the rest of the video
+    editability: 10   # clean in/out points
+  heuristic_blend: 0.15   # 0 = trust the LLM fully, 0.4 = heavily heuristic-guided
+
+# ----------------------------------------------------------------------------
+# EXPORT
+# ----------------------------------------------------------------------------
+export:
+  mode: copy              # copy = instant + lossless (keyframe-snapped)
+                          # precise = re-encode, frame-accurate, slower
+  reencode_crf: 20
+  reencode_preset: veryfast
+  padding_start: 0.15     # extra seconds kept before the clip
+  padding_end: 0.35       # extra seconds kept after
+  encoder: auto           # auto uses h264_nvenc when present, else libx264.
+                          # Only used when captions are burned in.
+
+# ----------------------------------------------------------------------------
+# ANIMATED CAPTIONS — word-by-word highlight, driven by Whisper word timestamps
+# ----------------------------------------------------------------------------
+captions:
+  enabled: true
+
+  # Rounded/heavy faces that ship with Windows:
+  #   Arial Rounded MT Bold  <- default, the roundest Windows has
+  #   Segoe UI Black | Arial Black | Impact | Bahnschrift | Cooper Black
+  # For a heavier rounded face (Poppins, Nunito, Baloo 2), drop the .ttf into
+  # assets/fonts/ and put its family name here. No system install needed.
+  font: Arial Rounded MT Bold
+  fonts_dir: assets/fonts
+
+  font_size_ratio: 0.070      # x the SMALLER video side, so 9:16 and 16:9 both work
+  base_color: '#FFFFFF'       # words not currently spoken
+  highlight_color: '#22C55E'  # the active word
+  outline_color: '#000000'
+  highlight_outline_color: '' # blank = same as outline_color
+  outline_ratio: 0.09         # x font size; thick outline keeps it readable
+  shadow_ratio: 0.05
+
+  position: bottom            # bottom | center
+  margin_v_ratio: 0.16        # x video height, from the bottom edge
+
+  max_words: 4                # words on screen at once
+  max_chars: 0                # 0 = fit the line to the frame automatically.
+                              # A word count alone is not enough: four long
+                              # words are far wider than four short ones.
+  max_duration: 2.4           # seconds before forcing a new phrase
+  uppercase: true
+  strip_punctuation: true
+
+  highlight_scale: 118        # % size of the active word
+  animation_ms: 130           # ease-in for the size pop (colour is instant —
+                              # easing colour makes short words look inactive)
+  fade_ms: 90                 # phrase fade in/out
+
+  # --- sync tuning ---
+  # Whisper infers word times from attention alignment, not acoustic onsets.
+  # Measured on real audio: median is ~67ms EARLY, but the p10-p90 spread is
+  # 226ms and the worst word lands +223ms late. Late is what reads as "behind".
+  time_offset: -0.05      # shifts every caption; negative = earlier.
+                          # Measured: late words fell 22% -> 8%.
+                          # -0.08 gets under 2%; past -0.12 feels ahead.
+  lead_in_max: 0.12       # a switch happens at the MIDDLE of the pause between
+                          # two words rather than at the noisier next-word
+                          # start; this caps how far early that can pull it.
+  tail_hold: 0.10         # keep the last word lit this long after it ends
+
+server:
+  host: 127.0.0.1         # localhost only — nothing leaves the machine
+  port: 8420
+  open_browser: true

@@ -188,6 +188,27 @@ class Config:
     # -- persistence -------------------------------------------------------
     def update(self, patch: Dict[str, Any]) -> None:
         self.data = _deep_merge(self.data, patch)
+        self._sanitize()
+
+    def _sanitize(self) -> None:
+        """Drop anything that does not belong, so a bad write can't accumulate.
+
+        scoring.weights in particular must only ever hold the six known keys
+        with numeric values.
+        """
+        weights = self.data.get("scoring", {}).get("weights")
+        if isinstance(weights, dict):
+            clean = {}
+            for key, value in weights.items():
+                if key not in SCORE_KEYS:
+                    continue
+                try:
+                    clean[key] = float(value)
+                except (TypeError, ValueError):
+                    clean[key] = float(DEFAULTS["scoring"]["weights"][key])
+            for key in SCORE_KEYS:
+                clean.setdefault(key, float(DEFAULTS["scoring"]["weights"][key]))
+            self.data["scoring"]["weights"] = clean
 
     def save(self) -> None:
         with open(self.path, "w", encoding="utf-8") as fh:
@@ -203,4 +224,6 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     if cfg_path.exists():
         with open(cfg_path, "r", encoding="utf-8") as fh:
             user = yaml.safe_load(fh) or {}
-    return Config(_deep_merge(DEFAULTS, user), cfg_path)
+    cfg = Config(_deep_merge(DEFAULTS, user), cfg_path)
+    cfg._sanitize()
+    return cfg

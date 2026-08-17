@@ -309,54 +309,49 @@ function renderResults(result) {
     + (types ? ` — ${types}` : '');
 
   $('clip-list').innerHTML = state.clips.map(clipCard).join('');
-  requestAnimationFrame(() => {
-    document.querySelectorAll('.sbar .fill').forEach((el) => { el.style.width = el.dataset.w; });
-    document.querySelectorAll('.score-ring .val').forEach((el) => { el.style.strokeDashoffset = el.dataset.off; });
-  });
   wireClipCards();
+  refreshSelCount();
   $('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function clipCard(c) {
-  const bars = Object.keys(SCORE_MAX).map((k) => {
-    const v = (c.scores && c.scores[k]) || 0;
-    const pct = Math.round((v / SCORE_MAX[k]) * 100);
-    return `<div class="sbar"><b>${SCORE_LABEL[k]}</b>
-      <span class="track"><span class="fill" data-w="${pct}%"></span></span>
-      <i>${Math.round(v)}/${SCORE_MAX[k]}</i></div>`;
+  const mini = Object.keys(SCORE_MAX).map((k) => {
+    const pct = Math.round((((c.scores && c.scores[k]) || 0) / SCORE_MAX[k]) * 100);
+    return `<div title="${SCORE_LABEL[k]} ${Math.round((c.scores && c.scores[k]) || 0)}/${SCORE_MAX[k]}"><span style="width:${pct}%"></span></div>`;
   }).join('');
-  const C = 151;
-  const off = C - C * Math.max(0, Math.min(100, c.score)) / 100;
+  const cls = c.score >= 80 ? '' : (c.score >= 60 ? 'mid' : 'low');
+  const thumbAt = c.start + Math.min(2, c.duration / 3);
+  const src = state.video
+    ? `/api/thumb?path=${encodeURIComponent(state.video.path)}&at=${thumbAt.toFixed(2)}`
+    : '';
   return `
-  <article class="clip" data-rank="${c.rank}">
-    <input class="clip-sel" type="checkbox" checked data-rank="${c.rank}" title="Include when exporting clips">
-    <div class="clip-top">
-      <div class="rank">#${c.rank}</div>
-      <div class="clip-head">
-        <div class="clip-title">${esc(c.title || '(untitled)')}</div>
-        <div class="clip-sub">
-          <span class="tc">${c.start_tc} → ${c.end_tc}</span>
-          <span>${Math.round(c.duration)}s</span>
-          <span class="type-chip" data-t="${esc(c.type)}">${esc(String(c.type).replace(/_/g, ' '))}</span>
-          ${c.confidence ? `<span title="LLM confidence">conf ${Math.round(c.confidence * 100)}%</span>` : ''}
-        </div>
-      </div>
-      <div class="score-ring">
-        <svg width="56" height="56"><circle class="track" cx="28" cy="28" r="24"></circle>
-          <circle class="val" cx="28" cy="28" r="24" stroke-dasharray="${C}"
-                  stroke-dashoffset="${C}" data-off="${off}"></circle></svg>
-        <span>${Math.round(c.score)}</span>
-      </div>
+  <article class="clip selected" data-rank="${c.rank}">
+    <div class="thumb">
+      ${src ? `<img loading="lazy" src="${src}" alt=""
+                onerror="this.style.display='none';this.nextElementSibling.style.display='grid'">` : ''}
+      <div class="thumb-fallback" style="display:${src ? 'none' : 'grid'}">🎬</div>
+      <label class="sel-box" title="Include this clip when exporting">
+        <input type="checkbox" checked data-rank="${c.rank}">
+      </label>
+      <div class="score-badge ${cls}">${Math.round(c.score)}<small>SCORE</small></div>
+      <div class="thumb-play">▶</div>
+      <span class="thumb-tc">${c.start_tc} → ${c.end_tc}</span>
+      <span class="thumb-dur">${Math.round(c.duration)}s</span>
     </div>
-    <div class="bars">${bars}</div>
-    <div class="reason"><strong>Why:</strong> ${esc(c.reason || '—')}</div>
-    ${c.verdict ? `<div class="verdict"><strong>Ranking verdict:</strong> ${esc(c.verdict)}</div>` : ''}
-    <details class="transcript"><summary>Transcript</summary><p>${esc(c.transcript || '')}</p></details>
-    <div class="clip-actions">
-      <button class="btn primary small act-play" data-rank="${c.rank}">▶ Preview</button>
-      <button class="btn ghost small act-copy" data-rank="${c.rank}">⧉ Copy timestamp</button>
-      <button class="btn ghost small act-copytext" data-rank="${c.rank}">⧉ Copy transcript</button>
-      <button class="btn ghost small act-cut" data-rank="${c.rank}">✂ Export this clip</button>
+    <div class="clip-body">
+      <div class="clip-meta">
+        <span class="rank">#${c.rank}</span>
+        <span class="type-chip" data-t="${esc(c.type)}">${esc(String(c.type).replace(/_/g, ' '))}</span>
+        ${c.confidence ? `<span class="chip" title="How confident the model was">conf ${Math.round(c.confidence * 100)}%</span>` : ''}
+      </div>
+      <div class="clip-title">${esc(c.title || '(untitled)')}</div>
+      <div class="mini-bars">${mini}</div>
+      <div class="reason">${esc(c.reason || '—')}</div>
+      <div class="clip-actions">
+        <button class="btn primary small act-play" data-rank="${c.rank}">▶ Preview</button>
+        <button class="btn ghost small act-copy" data-rank="${c.rank}" title="Copy the timecodes">⧉ TC</button>
+        <button class="btn ghost small act-cut" data-rank="${c.rank}">✂ Export</button>
+      </div>
     </div>
   </article>`;
 }
@@ -364,51 +359,91 @@ function clipCard(c) {
 function wireClipCards() {
   document.querySelectorAll('.clip').forEach((el) => {
     el.addEventListener('click', (e) => {
-      if (e.target.closest('button, input, summary, a')) return;
-      playClip(+el.dataset.rank);
+      if (e.target.closest('button, input, label, a')) return;
+      openPlayer(+el.dataset.rank);
     });
   });
-  document.querySelectorAll('.act-play').forEach((b) => b.onclick = () => playClip(+b.dataset.rank));
+  document.querySelectorAll('.act-play').forEach((b) => b.onclick = () => openPlayer(+b.dataset.rank));
   document.querySelectorAll('.act-copy').forEach((b) => b.onclick = () => {
     const c = clipOf(+b.dataset.rank);
     navigator.clipboard.writeText(`${c.start_tc} → ${c.end_tc}  (${Math.round(c.duration)}s)  ${c.title}`);
-    toast('Timestamp copied', 'ok', 2000);
-  });
-  document.querySelectorAll('.act-copytext').forEach((b) => b.onclick = () => {
-    navigator.clipboard.writeText(clipOf(+b.dataset.rank).transcript || '');
-    toast('Transcript copied', 'ok', 2000);
+    toast('Timecode copied', 'ok', 2000);
   });
   document.querySelectorAll('.act-cut').forEach((b) => b.onclick = () => cutClips([+b.dataset.rank], b));
-  document.querySelectorAll('.clip-sel').forEach((cb) => cb.onchange = () => {
+  document.querySelectorAll('.sel-box input').forEach((cb) => cb.onchange = () => {
     const r = +cb.dataset.rank;
     cb.checked ? state.selected.add(r) : state.selected.delete(r);
-    $('sel-all').checked = state.selected.size === state.clips.length;
+    cb.closest('.clip').classList.toggle('selected', cb.checked);
+    refreshSelCount();
   });
 }
 const clipOf = (rank) => state.clips.find((c) => c.rank === rank);
 
+function refreshSelCount() {
+  const n = state.selected.size;
+  const total = state.clips.length;
+  $('sel-count').textContent = n === total ? `All ${total} selected` : `${n} of ${total} selected`;
+  $('sel-all').checked = n === total && total > 0;
+  $('sel-all').indeterminate = n > 0 && n < total;
+  $('btn-cut').disabled = n === 0;
+}
+
 $('sel-all').onchange = (e) => {
-  state.selected = e.target.checked ? new Set(state.clips.map((c) => c.rank)) : new Set();
-  document.querySelectorAll('.clip-sel').forEach((cb) => { cb.checked = e.target.checked; });
+  const on = e.target.checked;
+  state.selected = on ? new Set(state.clips.map((c) => c.rank)) : new Set();
+  document.querySelectorAll('.sel-box input').forEach((cb) => {
+    cb.checked = on;
+    cb.closest('.clip').classList.toggle('selected', on);
+  });
+  refreshSelCount();
 };
 
 /* ---------------------------------------------------------------- preview */
 const video = $('video-el');
 let stopAt = null;
 
+function openPlayer(rank) {
+  $('player-modal').classList.remove('hidden');
+  playClip(rank);
+}
+
+function closePlayer() {
+  $('player-modal').classList.add('hidden');
+  video.pause();
+}
+
 function playClip(rank, transcoded = false) {
   const c = clipOf(rank);
   if (!c || !state.video) return;
   state.active = rank;
   state.transcoded = transcoded;
-  document.querySelectorAll('.clip').forEach((el) =>
-    el.classList.toggle('active', +el.dataset.rank === rank));
 
-  $('pv-empty').classList.add('hidden');
-  $('pv-player').classList.remove('hidden');
+  $('pv-rank').textContent = `#${c.rank}`;
   $('pv-title').textContent = c.title || '(untitled)';
-  $('pv-time').textContent = `${c.start_tc} → ${c.end_tc}`;
+  $('pv-time').textContent = `${c.start_tc} → ${c.end_tc} · ${Math.round(c.duration)}s`;
+  $('pv-type').textContent = String(c.type).replace(/_/g, ' ');
+  $('pv-type').dataset.t = c.type;
+  $('pv-score-text').textContent = `${Math.round(c.score)}/100`;
   $('pv-hint').textContent = '';
+
+  $('pv-bars').innerHTML = Object.keys(SCORE_MAX).map((k) => {
+    const v = (c.scores && c.scores[k]) || 0;
+    const pct = Math.round((v / SCORE_MAX[k]) * 100);
+    return `<div class="sbar"><b>${SCORE_LABEL[k]}</b>
+      <span class="track"><span class="fill" data-fill="${pct}%"></span></span>
+      <i>${Math.round(v)}/${SCORE_MAX[k]}</i></div>`;
+  }).join('');
+  $('pv-reason').innerHTML = `<strong>Why:</strong> ${esc(c.reason || '—')}`;
+  $('pv-verdict').classList.toggle('hidden', !c.verdict);
+  if (c.verdict) $('pv-verdict').innerHTML = `<strong>Ranking verdict:</strong> ${esc(c.verdict)}`;
+  $('pv-text').textContent = c.transcript || '';
+  requestAnimationFrame(() => {
+    $('pv-bars').querySelectorAll('.fill').forEach((el) => { el.style.width = el.dataset.fill; });
+  });
+
+  const idx = state.clips.findIndex((x) => x.rank === rank);
+  $('btn-prev-clip').disabled = idx <= 0;
+  $('btn-next-clip').disabled = idx < 0 || idx >= state.clips.length - 1;
 
   const p = encodeURIComponent(state.video.path);
   if (transcoded) {
@@ -425,8 +460,25 @@ function playClip(rank, transcoded = false) {
     if (video.readyState >= 1) seek();
     else video.addEventListener('loadedmetadata', seek, { once: true });
   }
-  $('preview-pane').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
+
+function stepClip(delta) {
+  const idx = state.clips.findIndex((c) => c.rank === state.active);
+  const next = state.clips[idx + delta];
+  if (next) playClip(next.rank);
+}
+
+$('btn-close-player').onclick = closePlayer;
+$('btn-prev-clip').onclick = () => stepClip(-1);
+$('btn-next-clip').onclick = () => stepClip(1);
+$('player-modal').onclick = (e) => { if (e.target.id === 'player-modal') closePlayer(); };
+$('btn-copy-text').onclick = () => {
+  navigator.clipboard.writeText(clipOf(state.active)?.transcript || '');
+  toast('Transcript copied', 'ok', 2000);
+};
+$('btn-cut-one').onclick = () => {
+  if (state.active !== null) cutClips([state.active], $('btn-cut-one'));
+};
 
 video.addEventListener('timeupdate', () => {
   const c = clipOf(state.active);
@@ -546,7 +598,9 @@ function applyConfigToUI(cfg) {
     <div class="wrow"><span>${SCORE_LABEL[k]}</span>
       <input type="range" min="0" max="40" step="1" data-w="${k}" value="${cfg.scoring.weights[k]}">
       <b data-wv="${k}">${cfg.scoring.weights[k]}</b></div>`).join('');
-  document.querySelectorAll('[data-w]').forEach((el) => {
+  // Scoped to #weights: an unscoped [data-w] also matched the score bars in the
+  // clip cards, which wrote junk keys like "84%": null into scoring.weights.
+  $('weights').querySelectorAll('[data-w]').forEach((el) => {
     el.oninput = () => { document.querySelector(`[data-wv="${el.dataset.w}"]`).textContent = el.value; };
   });
 }
@@ -618,7 +672,7 @@ $('settings-modal').onclick = (e) => { if (e.target.id === 'settings-modal') e.t
 
 $('btn-save-settings').onclick = async () => {
   const weights = {};
-  document.querySelectorAll('[data-w]').forEach((el) => { weights[el.dataset.w] = +el.value; });
+  $('weights').querySelectorAll('[data-w]').forEach((el) => { weights[el.dataset.w] = +el.value; });
   const patch = {
     whisper: { model: $('set-whisper').value, device: $('set-device').value,
                compute_type: $('set-compute').value },
@@ -664,8 +718,14 @@ $('btn-clear-cache').onclick = async () => {
 refreshHealth();
 setInterval(() => { if (!state.poll) refreshHealth(); }, 30000);
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') $('settings-modal').classList.add('hidden');
-  if (e.key === ' ' && state.active !== null && e.target === document.body) {
-    e.preventDefault(); video.paused ? video.play() : video.pause();
+  if (e.target.matches('input, select, textarea')) return;
+  const playerOpen = !$('player-modal').classList.contains('hidden');
+  if (e.key === 'Escape') {
+    $('settings-modal').classList.add('hidden');
+    if (playerOpen) closePlayer();
   }
+  if (!playerOpen) return;
+  if (e.key === ' ') { e.preventDefault(); video.paused ? video.play() : video.pause(); }
+  if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); stepClip(1); }
+  if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); stepClip(-1); }
 });

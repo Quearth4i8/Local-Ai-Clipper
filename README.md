@@ -275,9 +275,23 @@ Adding a third backend means subclassing `LLMBackend` in `app/llm/base.py`.
 
 **UI:** `start.bat` → **Select video** → adjust clips / min / max / language → **Analyse video**.
 
-Then, per clip: **▶ Preview** (plays the exact range in-page), **⧉ Copy timestamp**,
-**⧉ Copy transcript**, **✂ Export this clip**. Top bar: **Export ▾** (JSON / CSV / TXT)
-and **✂ Export selected clips**.
+Results come back as a card grid, one card per clip, each with a thumbnail, the
+score, the clip type and a compact breakdown of the six categories:
+
+* **Click a card** (or ▶ Preview) to open the detail view: the video cut to the
+  exact range, the full score breakdown, the reasoning, and the transcript.
+  Navigate between clips with **↑ / ↓** (or `j` / `k`), close with **Esc**.
+* **The checkbox on each thumbnail** controls what gets exported. The toolbar
+  shows "N of M selected"; the header checkbox selects or clears everything.
+* **✂ Export video clips** cuts everything selected (with captions if the
+  **Captions** box is ticked). **✂ Export** on a card does just that one.
+* **Export data ▾** downloads JSON / CSV / TXT, or writes all three to `output/`.
+
+`Force re-transcribe` is worth understanding: transcripts are cached per video,
+so re-running an analysis normally **skips Whisper entirely** and finishes in
+seconds. Tick it only after changing the Whisper model or language, or if the
+transcript looked wrong — it throws the cache away and listens to the whole
+video again.
 
 **Command line:**
 
@@ -311,7 +325,10 @@ Everything the spec asks for is configurable:
 | Caption style | `captions.*` (font, colours, size, position, pop) |
 | Caption encoder | `export.encoder` (`auto` uses NVENC when present) |
 
-The Settings panel writes back to the same file.
+The Settings panel writes back to the same file. Because it saves with PyYAML,
+**comments in `config.yaml` are stripped on save** — so the fully annotated
+version lives in **[`config.reference.yaml`](config.reference.yaml)**, which the
+app never touches. Copy keys from there when you want to edit by hand.
 
 ### Adding a language
 

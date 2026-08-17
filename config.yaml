@@ -46,12 +46,12 @@ clips:
   min_gap_between_clips: 5
 scoring:
   weights:
-    hook: 25
-    payoff: 25
-    emotion: 15
-    curiosity: 15
-    standalone: 10
-    editability: 10
+    hook: 25.0
+    payoff: 25.0
+    emotion: 15.0
+    curiosity: 15.0
+    standalone: 10.0
+    editability: 10.0
   heuristic_blend: 0.15
 export:
   mode: copy
@@ -65,8 +65,8 @@ captions:
   font: Arial Rounded MT Bold
   fonts_dir: assets/fonts
   font_size_ratio: 0.07
-  base_color: '#FFFFFF'
-  highlight_color: '#22C55E'
+  base_color: '#ffffff'
+  highlight_color: '#44c520'
   outline_color: '#000000'
   highlight_outline_color: ''
   outline_ratio: 0.09
@@ -74,12 +74,9 @@ captions:
   position: bottom
   margin_v_ratio: 0.16
   max_words: 4
-  # Hard cap on line width. 0 = fit automatically to the frame, which is what
-  # you want: four short words and four long ones are very different on screen,
-  # and a word count alone lets a line run past both edges.
   max_chars: 0
   max_duration: 2.4
-  uppercase: true
+  uppercase: false
   strip_punctuation: true
   highlight_scale: 118
   animation_ms: 130
