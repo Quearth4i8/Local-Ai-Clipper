@@ -7,7 +7,9 @@ from __future__ import annotations
 import logging
 import mimetypes
 import os
+import shutil
 import subprocess
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,7 +23,8 @@ from pydantic import BaseModel
 from .. import APP_NAME, __version__
 from ..cache.store import CacheStore
 from ..config import Config, load_config
-from ..export.exporters import export_clips, to_csv, to_json, to_text, write_all
+from ..export.exporters import (_clip_words, export_clips, to_csv, to_json, to_text,
+                                write_all, write_ass_for_clip)
 from ..llm.base import get_backend
 from ..models import fmt_ts
 from ..pipeline import JobManager, Pipeline, run_job
@@ -32,6 +35,7 @@ from .filedialog import pick_file
 log = logging.getLogger("clipfinder.server")
 
 STATIC_DIR = Path(__file__).parent / "static"
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 
 app = FastAPI(title=APP_NAME, version=__version__, docs_url=None, redoc_url=None)
 jobs = JobManager()
@@ -63,6 +67,13 @@ class ExportClipsBody(BaseModel):
     job_id: str
     ranks: Optional[List[int]] = None
     mode: Optional[str] = None
+    captions: Optional[bool] = None
+
+
+class CaptionPreviewBody(BaseModel):
+    job_id: str
+    rank: int = 1
+    seconds: float = 6.0
 
 
 class ConfigBody(BaseModel):
@@ -233,6 +244,10 @@ def export_clips_endpoint(body: ExportClipsBody) -> Dict[str, Any]:
         raise HTTPException(400, "No clips selected")
     video = result.get("video", {})
     exp = CFG.section("export")
+    caps = dict(CFG.section("captions"))
+    if body.captions is not None:
+        caps["enabled"] = bool(body.captions)
+    fonts = CFG.fonts_dir
     try:
         written = export_clips(
             ffmpeg(), video.get("path"), clips, CFG.output_dir,
@@ -242,11 +257,80 @@ def export_clips_endpoint(body: ExportClipsBody) -> Dict[str, Any]:
             pad_start=float(exp.get("padding_start", 0.15)),
             pad_end=float(exp.get("padding_end", 0.35)),
             video_duration=float(video.get("duration", 0) or 0),
+            captions=caps,
+            video_width=int(video.get("width", 0) or 0),
+            video_height=int(video.get("height", 0) or 0),
+            encoder=str(exp.get("encoder", "auto")),
+            fonts_dir=str(fonts) if fonts else None,
         )
     except FFmpegError as exc:
         raise HTTPException(500, str(exc))
     return {"ok": True, "clips": written,
             "folder": str(Path(written[0]["path"]).parent) if written else str(CFG.output_dir)}
+
+
+@app.post("/api/caption_preview")
+def caption_preview(body: CaptionPreviewBody):
+    """Render a few seconds of one clip with captions burned in.
+
+    Choosing a font and colours by re-exporting twelve clips each time would be
+    miserable, so this renders one short sample instead.
+    """
+    job = jobs.get(body.job_id)
+    if not job or not job.result:
+        raise HTTPException(404, "No finished analysis for that job")
+    clip = next((c for c in job.result.get("clips", []) if c.get("rank") == body.rank), None)
+    if clip is None:
+        raise HTTPException(404, "No such clip")
+
+    video = job.result.get("video", {})
+    exp = CFG.section("export")
+    caps = {**CFG.section("captions"), "enabled": True}
+    pad = float(exp.get("padding_start", 0.15))
+    start = max(0.0, float(clip["start"]) - pad)
+    end = min(float(clip["end"]), start + max(2.0, float(body.seconds)))
+
+    tmp = Path(tempfile.mkdtemp(prefix="capprev_"))
+    ass = write_ass_for_clip(_clip_words(clip), start, end,
+                             int(video.get("width", 0) or 0),
+                             int(video.get("height", 0) or 0),
+                             caps, tmp / "p.ass")
+    out = tmp / "preview.mp4"
+    fonts = CFG.fonts_dir
+    try:
+        ffmpeg().burn(video.get("path"), str(out), start, end, str(ass),
+                      encoder=str(exp.get("encoder", "auto")),
+                      fonts_dir=str(fonts) if fonts else None)
+    except FFmpegError as exc:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise HTTPException(500, str(exc))
+
+    def stream():
+        try:
+            with open(out, "rb") as fh:
+                while chunk := fh.read(262144):
+                    yield chunk
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    return StreamingResponse(stream(), media_type="video/mp4",
+                             headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/fonts")
+def fonts() -> Dict[str, Any]:
+    """Caption font choices: known Windows faces plus anything dropped into
+    assets/fonts/."""
+    builtin = ["Arial Rounded MT Bold", "Segoe UI Black", "Arial Black", "Impact",
+               "Bahnschrift", "Cooper Black", "Segoe UI Semibold", "Verdana"]
+    dropped: List[str] = []
+    raw = CFG.get("captions.fonts_dir", "")
+    if raw:
+        d = Path(raw) if Path(raw).is_absolute() else (ROOT_DIR / raw)
+        if d.is_dir():
+            dropped = sorted({p.stem for p in d.glob("*.[ot]t[fc]")})
+    return {"builtin": builtin, "dropped": dropped,
+            "folder": str((ROOT_DIR / raw) if raw else "")}
 
 
 @app.post("/api/open_folder")

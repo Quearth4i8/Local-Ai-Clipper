@@ -445,6 +445,36 @@ video.addEventListener('error', () => {
 $('btn-replay').onclick = () => { if (state.active !== null) playClip(state.active, state.transcoded); };
 $('btn-transcode').onclick = () => { if (state.active !== null) playClip(state.active, true); };
 
+/* Render a short sample with captions burned in, so the style can be dialled in
+   without re-exporting every clip. */
+$('btn-captest').onclick = async () => {
+  const rank = state.active !== null ? state.active : (state.clips[0] && state.clips[0].rank);
+  if (!rank) return;
+  const btn = $('btn-captest');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Rendering…';
+  $('pv-hint').textContent = 'Burning captions into a 6-second sample…';
+  try {
+    const res = await fetch('/api/caption_preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: state.jobId, rank, seconds: 6 }),
+    });
+    if (!res.ok) throw new Error((await res.text()).slice(0, 300));
+    const blob = await res.blob();
+    if (state.capUrl) URL.revokeObjectURL(state.capUrl);
+    state.capUrl = URL.createObjectURL(blob);
+    state.transcoded = true;   // times are already clip-relative
+    stopAt = null;
+    video.src = state.capUrl;
+    video.load();
+    video.play().catch(() => {});
+    $('pv-hint').textContent = 'Caption style sample. Adjust it in Settings → Animated captions.';
+  } catch (e) {
+    $('pv-hint').textContent = '';
+    toast(`Caption preview failed: ${e.message}`, 'err', 9000);
+  } finally { btn.disabled = false; btn.textContent = label; }
+};
+
 /* ----------------------------------------------------------------- export */
 $('btn-export').onclick = (e) => { e.stopPropagation(); $('export-menu').classList.toggle('hidden'); };
 document.addEventListener('click', () => $('export-menu').classList.add('hidden'));
@@ -467,10 +497,18 @@ $('btn-cut').onclick = () => cutClips([...state.selected], $('btn-cut'));
 
 async function cutClips(ranks, btn) {
   if (!ranks.length) { toast('No clips selected', 'info'); return; }
+  const withCaptions = $('opt-captions').checked;
   const label = btn.textContent;
-  btn.disabled = true; btn.textContent = `Cutting ${ranks.length}…`;
+  btn.disabled = true;
+  btn.textContent = withCaptions ? `Burning captions ${ranks.length}…` : `Cutting ${ranks.length}…`;
+  if (withCaptions) {
+    toast('Burning captions re-encodes the video — this takes longer than a plain cut.',
+      'info', 5000);
+  }
   try {
-    const r = await api('/api/export_clips', { method: 'POST', body: { job_id: state.jobId, ranks } });
+    const r = await api('/api/export_clips', {
+      method: 'POST', body: { job_id: state.jobId, ranks, captions: withCaptions },
+    });
     toast(`${r.clips.length} clip(s) written to ${r.folder}`, 'ok', 6000);
     api('/api/open_folder', { method: 'POST', body: { path: r.folder } }).catch(() => {});
   } catch (e) { toast(e.message, 'err', 8000); }
@@ -502,6 +540,8 @@ function applyConfigToUI(cfg) {
   $('set-blend').value = cfg.scoring.heuristic_blend;
   $('val-blend').textContent = (+cfg.scoring.heuristic_blend).toFixed(2);
 
+  applyCaptionsToUI(cfg.captions || {});
+
   $('weights').innerHTML = WEIGHT_KEYS.map((k) => `
     <div class="wrow"><span>${SCORE_LABEL[k]}</span>
       <input type="range" min="0" max="40" step="1" data-w="${k}" value="${cfg.scoring.weights[k]}">
@@ -512,6 +552,58 @@ function applyConfigToUI(cfg) {
 }
 $('set-div').oninput = (e) => { $('val-div').textContent = (+e.target.value).toFixed(2); };
 $('set-blend').oninput = (e) => { $('val-blend').textContent = (+e.target.value).toFixed(2); };
+
+/* ---------------------------------------------------------------- captions */
+async function applyCaptionsToUI(c) {
+  $('opt-captions').checked = c.enabled !== false;
+  $('cap-size').value = c.font_size_ratio ?? 0.07;
+  $('cap-words').value = c.max_words ?? 4;
+  $('cap-pos').value = c.position || 'bottom';
+  $('cap-margin').value = c.margin_v_ratio ?? 0.16;
+  $('cap-scale').value = c.highlight_scale ?? 118;
+  $('cap-anim').value = c.animation_ms ?? 130;
+  $('cap-sync').value = Math.round((c.time_offset ?? -0.05) * 1000);
+  $('cap-base').value = c.base_color || '#FFFFFF';
+  $('cap-hl').value = c.highlight_color || '#22C55E';
+  $('cap-outline').value = c.outline_color || '#000000';
+  $('cap-upper').checked = c.uppercase !== false;
+  $('cap-strip').checked = c.strip_punctuation !== false;
+  syncCaptionLabels();
+
+  try {
+    const f = await api('/api/fonts');
+    const opts = [];
+    if (f.dropped.length) {
+      opts.push(`<optgroup label="From assets/fonts">`
+        + f.dropped.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('')
+        + `</optgroup>`);
+    }
+    opts.push(`<optgroup label="Installed on Windows">`
+      + f.builtin.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('')
+      + `</optgroup>`);
+    const current = c.font || 'Arial Rounded MT Bold';
+    if (![...f.dropped, ...f.builtin].includes(current)) {
+      opts.unshift(`<option value="${esc(current)}">${esc(current)}</option>`);
+    }
+    $('cap-font').innerHTML = opts.join('');
+    $('cap-font').value = current;
+    $('cap-fonthint').textContent = f.dropped.length
+      ? `${f.dropped.length} custom font(s) loaded from assets/fonts/`
+      : 'Want Poppins or Nunito? Drop the .ttf into assets/fonts/ — no install needed.';
+  } catch { /* keep whatever is in the DOM */ }
+}
+
+function syncCaptionLabels() {
+  $('val-capsize').textContent = `${(+$('cap-size').value * 100).toFixed(1)}%`;
+  $('val-capmargin').textContent = `${Math.round(+$('cap-margin').value * 100)}%`;
+  $('val-capscale').textContent = `${$('cap-scale').value}%`;
+  $('val-capanim').textContent = `${$('cap-anim').value}ms`;
+  const s = +$('cap-sync').value;
+  $('val-capsync').textContent = `${s > 0 ? '+' : ''}${s}ms`;
+}
+['cap-size', 'cap-margin', 'cap-scale', 'cap-anim', 'cap-sync'].forEach((id) => {
+  $(id).oninput = syncCaptionLabels;
+});
 
 $('btn-settings').onclick = async () => {
   $('settings-modal').classList.remove('hidden');
@@ -536,6 +628,22 @@ $('btn-save-settings').onclick = async () => {
              boundary_optimization: $('set-boundary').value === 'true',
              diversity_lambda: +$('set-div').value },
     scoring: { weights, heuristic_blend: +$('set-blend').value },
+    captions: {
+      enabled: $('opt-captions').checked,
+      font: $('cap-font').value,
+      font_size_ratio: +$('cap-size').value,
+      max_words: +$('cap-words').value,
+      position: $('cap-pos').value,
+      margin_v_ratio: +$('cap-margin').value,
+      highlight_scale: +$('cap-scale').value,
+      animation_ms: +$('cap-anim').value,
+      base_color: $('cap-base').value,
+      highlight_color: $('cap-hl').value,
+      outline_color: $('cap-outline').value,
+      uppercase: $('cap-upper').checked,
+      strip_punctuation: $('cap-strip').checked,
+      time_offset: +$('cap-sync').value / 1000,
+    },
   };
   try {
     await api('/api/config', { method: 'POST', body: { config: patch, save: true } });

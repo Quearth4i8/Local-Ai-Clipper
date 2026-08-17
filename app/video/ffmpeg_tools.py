@@ -188,6 +188,70 @@ class FFmpeg:
             raise FFmpegError(proc.stderr.decode("utf-8", "ignore")[-500:])
         return str(out)
 
+    # ------------------------------------------------------ caption burning
+    def has_encoder(self, name: str) -> bool:
+        try:
+            proc = self._run([self.ffmpeg, "-hide_banner", "-encoders"], timeout=20)
+            return name.encode() in proc.stdout
+        except Exception:  # noqa: BLE001
+            return False
+
+    def pick_encoder(self, preference: str = "auto") -> List[str]:
+        """NVENC when available - burning captions re-encodes, and on an RTX
+        card that is several times faster than libx264."""
+        pref = (preference or "auto").lower()
+        if pref in ("nvenc", "h264_nvenc") or (pref == "auto" and self.has_encoder("h264_nvenc")):
+            if self.has_encoder("h264_nvenc"):
+                return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23",
+                        "-b:v", "0", "-pix_fmt", "yuv420p"]
+        return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p"]
+
+    def burn(self, src: str, out: str, start: float, end: float, ass_path: str, *,
+             encoder: str = "auto", fonts_dir: Optional[str] = None) -> str:
+        """Cut [start, end] and burn an ASS subtitle file into the picture.
+
+        The subtitles filter parses its argument as a filtergraph token, where
+        ':' and '\\' are syntax - a nightmare with Windows paths. Instead of
+        escaping, we run FFmpeg with cwd set to the .ass file's folder and pass
+        a bare ASCII filename, which has neither.
+        """
+        ass = Path(ass_path)
+        duration = max(0.2, end - start)
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+
+        vf = f"subtitles={ass.name}"
+        if fonts_dir:
+            fonts = Path(fonts_dir)
+            if fonts.is_dir():
+                # Relative to cwd, so it stays free of colons too.
+                try:
+                    rel = fonts.resolve().relative_to(ass.parent.resolve())
+                    vf += f":fontsdir={rel.as_posix()}"
+                except ValueError:
+                    vf += f":fontsdir={fonts.name}"
+
+        args = [
+            self.ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", f"{max(0.0, start):.3f}", "-i", str(Path(src).resolve()),
+            "-t", f"{duration:.3f}",
+            "-vf", vf,
+            *self.pick_encoder(encoder),
+            "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart",
+            str(Path(out).resolve()),
+        ]
+        proc = subprocess.run(args, capture_output=True, creationflags=_NO_WINDOW,
+                              cwd=str(ass.parent))
+        if proc.returncode != 0:
+            err = proc.stderr.decode("utf-8", "ignore")[-600:]
+            if "h264_nvenc" in " ".join(args):
+                # NVENC can fail if the GPU is busy or the driver refuses the
+                # session; CPU encoding always works.
+                return self.burn(src, out, start, end, ass_path,
+                                 encoder="libx264", fonts_dir=fonts_dir)
+            raise FFmpegError(f"Caption burn failed: {err}")
+        return str(out)
+
     def preview_stream(self, src: str, start: float, end: float,
                        height: int = 720) -> Iterable[bytes]:
         """Transcode a section on the fly to fragmented MP4 for in-browser preview.

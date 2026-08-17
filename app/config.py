@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import yaml
 
@@ -79,6 +79,32 @@ DEFAULTS: Dict[str, Any] = {
         "reencode_preset": "veryfast",
         "padding_start": 0.15,
         "padding_end": 0.35,
+        "encoder": "auto",
+    },
+    "captions": {
+        "enabled": True,
+        "font": "Arial Rounded MT Bold",
+        "fonts_dir": "assets/fonts",
+        "font_size_ratio": 0.070,
+        "base_color": "#FFFFFF",
+        "highlight_color": "#22C55E",
+        "outline_color": "#000000",
+        "highlight_outline_color": "",
+        "outline_ratio": 0.09,
+        "shadow_ratio": 0.05,
+        "position": "bottom",
+        "margin_v_ratio": 0.16,
+        "max_words": 4,
+        "max_chars": 0,
+        "max_duration": 2.4,
+        "uppercase": True,
+        "strip_punctuation": True,
+        "highlight_scale": 118,
+        "animation_ms": 130,
+        "fade_ms": 90,
+        "time_offset": -0.05,
+        "lead_in_max": 0.12,
+        "tail_hold": 0.10,
     },
     "server": {
         "host": "127.0.0.1",
@@ -139,6 +165,17 @@ class Config:
         p = self._resolve(self.get("general.output_dir", "output"))
         p.mkdir(parents=True, exist_ok=True)
         return p
+
+    @property
+    def fonts_dir(self) -> Optional[Path]:
+        """Drop-in folder for caption fonts; None when it holds no font files."""
+        raw = self.get("captions.fonts_dir", "")
+        if not raw:
+            return None
+        p = self._resolve(raw)
+        if p.is_dir() and any(p.glob("*.[ot]t[fc]")):
+            return p
+        return None
 
     # -- weights -----------------------------------------------------------
     @property

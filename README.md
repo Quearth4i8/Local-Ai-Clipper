@@ -32,7 +32,71 @@ Transcript: "..."
 ```
 
 Exported as **JSON**, **CSV** and a **copy-paste text** block, with an optional
-one-click FFmpeg cut of the selected clips.
+one-click FFmpeg cut of the selected clips — **with animated captions burned in**.
+
+---
+
+## Animated captions
+
+The exported clips can carry word-by-word highlight captions: the phrase sits in
+white, and each word turns green and pops slightly **exactly as it is spoken**.
+
+```
+IN  MARCH  I WALKED          ← "MARCH" is green + 118% size on that frame
+```
+
+This is driven by Whisper's **word-level timestamps**, so the highlight lands on
+the real word, not on an estimate. Rendering is done by generating an ASS
+subtitle file (one event per word, with `\t` easing the scale) and burning it in
+with FFmpeg/libass.
+
+Toggle it with the **Captions** checkbox above the results, and tune it in
+**Settings → Animated captions**: font, size, the three colours, position,
+words-on-screen, uppercase, pop size and pop speed. **▶ Preview captions** in the
+player renders a 6-second sample so you can dial the style in without
+re-exporting everything.
+
+| | |
+|---|---|
+| Default font | `Arial Rounded MT Bold` — the roundest face Windows ships |
+| Other installed options | Segoe UI Black, Arial Black, Impact, Bahnschrift, Cooper Black |
+| Custom fonts | drop a `.ttf` in `assets/fonts/` — no install needed ([details](assets/fonts/README.md)) |
+| Highlight colour | `#22C55E` |
+
+Burning captions **re-encodes** the video (you cannot draw on pixels with a
+stream copy), so it is slower than a plain cut — but it uses **NVENC** on an
+NVIDIA card: two ~50-second clips took **3.3 s** on an RTX 3050. Unchecking
+Captions goes back to instant lossless stream-copy cuts.
+
+### Caption sync
+
+Whisper infers word times from attention alignment, not from acoustic onsets,
+so individual words scatter. Measured against real audio onsets (193 samples,
+`small` model): the median word timestamp is actually ~67 ms *early*, but the
+p10→p90 spread is **226 ms** and the worst word lands **+223 ms late**. Late is
+what reads as "the caption is behind the speaker" — early is barely noticeable.
+
+Two things counteract it:
+
+- **Switching at the middle of the pause between two words** instead of at the
+  next word's start time. Both ends of a pause are estimates, so the midpoint
+  averages the two errors — and it is invisible, because nobody is speaking
+  during the gap.
+- **`captions.time_offset`** (default `-0.05 s`), a global shift, exposed as the
+  **Sync** slider in Settings. Drag it left if captions still feel behind.
+
+Measured effect of the two together: words landing noticeably late (>60 ms)
+dropped from **22% → 8%**, worst-case late from +223 ms → +173 ms.
+
+Two things that do *not* help, both tested and rejected:
+
+- `vad_filter: false` — makes alignment **worse** (spread 226 ms → 258 ms, one
+  word +1149 ms late). Leave VAD on.
+- Blaming FFmpeg's seek — measured at +0 to +16 ms, i.e. under one frame.
+
+Perfect sync would need forced alignment (WhisperX and friends). If you want to
+push accuracy further without that, `whisper.model: turbo` aligns better than
+`small`.
 
 ---
 
@@ -244,6 +308,8 @@ Everything the spec asks for is configurable:
 | Language | `general.language` (`auto`, `en`, `fr`, `ar`, …) |
 | Diversity strength | `clips.diversity_lambda` |
 | Export mode | `export.mode` (`copy` = instant, `precise` = frame-accurate) |
+| Caption style | `captions.*` (font, colours, size, position, pop) |
+| Caption encoder | `export.encoder` (`auto` uses NVENC when present) |
 
 The Settings panel writes back to the same file.
 
@@ -390,6 +456,44 @@ Open the live log in the progress panel. Usually the model isn't installed, or
 **Video preview is black / won't play**
 Browsers only decode MP4-H.264/AAC and WebM natively. For MKV, HEVC or AV1 press
 **⟳ Transcoded preview** — FFmpeg transcodes just that section on the fly.
+
+**Captions show the wrong font / fall back to something plain**
+libass matches on the font's **family name**, not the filename. Check the exact
+name in Settings → Animated captions → Font (the dropdown only lists fonts that
+exist). For a dropped-in file, `Poppins-ExtraBold.ttf` is usually the family
+`Poppins ExtraBold`.
+
+**Captions feel behind the speaker**
+Drag **Settings → Animated captions → Sync** to the left (more negative). It
+shifts every caption earlier; `-80 ms` cuts noticeably-late words to under 2%.
+Going past about `-120 ms` starts to feel ahead of the voice instead. See
+[Caption sync](#caption-sync) for the measurements behind the default.
+
+**Two phrases drawn on top of each other**
+Fixed. Phrase timelines are clamped so a phrase always leaves the screen before
+the next one appears — `tail_hold + lead_in_max` used to be able to exceed a
+short pause between phrases, and both drew at the same position.
+
+**Captions run past the edge of the frame**
+`captions.max_chars: 0` fits the line to the frame automatically (video width,
+font size and margins). Set a number to override it. A word count alone is not
+enough — four long words are far wider than four short ones.
+
+**Words missing from the captions**
+The caption layer never drops a transcribed word (there is one caption event per
+word, asserted in the tests). If text is missing, Whisper did not transcribe it:
+try `whisper.model: turbo`, which handles background music and fast speech much
+better than `small`.
+
+**Captions are too big / too small / cover the subject**
+`captions.font_size_ratio` is a fraction of the *smaller* video side, so it
+scales correctly for both 9:16 and 16:9. Move them with `captions.margin_v_ratio`
+(fraction of height from the bottom) or set `captions.position: center`.
+
+**Caption export is slow**
+Burning re-encodes. Check that `export.encoder: auto` is picking up NVENC —
+`main.py check` and the log will show it. Without an NVIDIA GPU it falls back to
+libx264, which is several times slower.
 
 **Exported clips start slightly early**
 `export.mode: copy` snaps cuts to the nearest keyframe (instant, lossless). For

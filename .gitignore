@@ -57,6 +57,11 @@ config.local.yaml
 *.ogg
 *.opus
 
+# ------------------------------------------------------------ caption fonts ---
+# Font files you drop in are licensed assets - keep them out of the repo.
+assets/fonts/*
+!assets/fonts/README.md
+
 # ---------------------------------------------------------------- editors ---
 .vscode/
 .idea/

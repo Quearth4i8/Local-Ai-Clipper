@@ -31,7 +31,7 @@ llm:
 clips:
   min_duration: 20
   max_duration: 90
-  target_count: 12
+  target_count: 10
   ideal_duration: 45
   block_seconds: 420
   block_overlap_seconds: 45
@@ -59,6 +59,34 @@ export:
   reencode_preset: veryfast
   padding_start: 0.15
   padding_end: 0.35
+  encoder: auto
+captions:
+  enabled: true
+  font: Arial Rounded MT Bold
+  fonts_dir: assets/fonts
+  font_size_ratio: 0.07
+  base_color: '#FFFFFF'
+  highlight_color: '#22C55E'
+  outline_color: '#000000'
+  highlight_outline_color: ''
+  outline_ratio: 0.09
+  shadow_ratio: 0.05
+  position: bottom
+  margin_v_ratio: 0.16
+  max_words: 4
+  # Hard cap on line width. 0 = fit automatically to the frame, which is what
+  # you want: four short words and four long ones are very different on screen,
+  # and a word count alone lets a line run past both edges.
+  max_chars: 0
+  max_duration: 2.4
+  uppercase: true
+  strip_punctuation: true
+  highlight_scale: 118
+  animation_ms: 130
+  fade_ms: 90
+  time_offset: -0.05
+  lead_in_max: 0.12
+  tail_hold: 0.1
 server:
   host: 127.0.0.1
   port: 8420

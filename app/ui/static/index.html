@@ -132,6 +132,9 @@
       </div>
       <div class="res-actions">
         <label class="checkbox"><input type="checkbox" id="sel-all"> Select all</label>
+        <label class="checkbox" title="Burn animated word-by-word captions into the exported clips">
+          <input type="checkbox" id="opt-captions" checked> Captions
+        </label>
         <div class="menu-wrap">
           <button class="btn ghost" id="btn-export">Export ▾</button>
           <div class="menu hidden" id="export-menu">
@@ -164,6 +167,7 @@
           </div>
           <div class="pv-actions">
             <button class="btn ghost small" id="btn-replay">↺ Replay clip</button>
+            <button class="btn ghost small" id="btn-captest" title="Render a few seconds with the captions burned in">🅐 Preview captions</button>
             <button class="btn ghost small" id="btn-transcode" title="Use if the video does not play">⟳ Transcoded preview</button>
           </div>
           <p class="pv-hint" id="pv-hint"></p>
@@ -241,6 +245,52 @@
           <label>Diversity <span class="val" id="val-div">0.70</span>
             <input type="range" id="set-div" min="0" max="1" step="0.05">
           </label>
+        </fieldset>
+
+        <fieldset class="span-2">
+          <legend>Animated captions</legend>
+          <div class="cap-grid">
+            <label>Font
+              <select id="cap-font"></select>
+            </label>
+            <label>Size <span class="val" id="val-capsize">7.0%</span>
+              <input type="range" id="cap-size" min="0.03" max="0.12" step="0.005">
+            </label>
+            <label>Words on screen
+              <input type="number" id="cap-words" min="1" max="8">
+            </label>
+            <label>Position
+              <select id="cap-pos">
+                <option value="bottom">bottom</option>
+                <option value="center">center</option>
+              </select>
+            </label>
+            <label>Height <span class="val" id="val-capmargin">16%</span>
+              <input type="range" id="cap-margin" min="0.02" max="0.45" step="0.01">
+            </label>
+            <label>Active word size <span class="val" id="val-capscale">118%</span>
+              <input type="range" id="cap-scale" min="100" max="150" step="2">
+            </label>
+            <label class="colour-row">Text
+              <input type="color" id="cap-base">
+            </label>
+            <label class="colour-row">Active word
+              <input type="color" id="cap-hl">
+            </label>
+            <label class="colour-row">Outline
+              <input type="color" id="cap-outline">
+            </label>
+            <label>Pop speed <span class="val" id="val-capanim">130ms</span>
+              <input type="range" id="cap-anim" min="0" max="400" step="10">
+            </label>
+            <label title="Negative shifts captions earlier. If they feel behind the speaker, drag left.">
+              Sync <span class="val" id="val-capsync">-50ms</span>
+              <input type="range" id="cap-sync" min="-400" max="200" step="10">
+            </label>
+            <label class="checkbox inline"><input type="checkbox" id="cap-upper"> UPPERCASE</label>
+            <label class="checkbox inline"><input type="checkbox" id="cap-strip"> Drop end punctuation</label>
+          </div>
+          <p class="hint" id="cap-fonthint"></p>
         </fieldset>
 
         <fieldset>

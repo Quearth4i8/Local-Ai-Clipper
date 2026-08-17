@@ -365,6 +365,14 @@ fieldset input, fieldset select {
 }
 fieldset input[type="range"] { padding: 0; accent-color: var(--accent); background: none; border: 0; }
 .val { float: right; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+fieldset.span-2 { grid-column: 1 / -1; }
+.cap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 4px 16px; }
+.cap-grid label { margin-bottom: 10px; }
+.cap-grid .checkbox.inline { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.cap-grid .checkbox.inline input { width: 15px; height: 15px; margin: 0; }
+.colour-row input[type="color"] {
+  height: 34px; padding: 3px; cursor: pointer; background: var(--bg-2);
+}
 .weights { display: grid; gap: 10px; }
 .wrow { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
 .wrow span { width: 88px; color: var(--text-dim); }

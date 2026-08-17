@@ -5,12 +5,15 @@ import csv
 import io
 import json
 import re
+import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from ..models import fmt_ts
+from ..models import Word, fmt_ts
 from ..video.ffmpeg_tools import FFmpeg
+from .captions import build_ass, words_in_range
 
 CSV_COLUMNS = ["rank", "start", "end", "start_tc", "end_tc", "duration", "score",
                "type", "title", "reason", "hook", "payoff", "emotion", "curiosity",
@@ -142,11 +145,17 @@ def export_clips(
     pad_start: float = 0.15,
     pad_end: float = 0.35,
     video_duration: float = 0.0,
+    captions: Optional[Dict[str, Any]] = None,
+    video_width: int = 0,
+    video_height: int = 0,
+    encoder: str = "auto",
+    fonts_dir: Optional[str] = None,
     on_progress: Optional[Callable[[int, int, str], None]] = None,
 ) -> List[Dict[str, Any]]:
     stem = safe_stem(Path(video_path).stem)
     folder = Path(output_dir) / f"{stem}_clips"
     folder.mkdir(parents=True, exist_ok=True)
+    burn_captions = bool(captions and captions.get("enabled"))
 
     written: List[Dict[str, Any]] = []
     total = len(clips)
@@ -160,7 +169,50 @@ def export_clips(
         out = folder / f"clip_{int(rank):02d}_{title}.mp4"
         if on_progress:
             on_progress(n, total, out.name)
-        ff.cut(video_path, str(out), start, end, mode=mode, crf=crf, preset=preset)
+
+        words = _clip_words(clip)
+        if burn_captions and words:
+            # Build the subtitle in a temp dir, not next to the exports: a failed
+            # burn used to leave a stray .ass sitting in the output folder.
+            tmp = Path(tempfile.mkdtemp(prefix="clipcap_"))
+            try:
+                ass_path = write_ass_for_clip(words, start, end, video_width,
+                                              video_height, captions, tmp / "c.ass")
+                ff.burn(video_path, str(out), start, end, str(ass_path),
+                        encoder=encoder, fonts_dir=fonts_dir)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+        else:
+            ff.cut(video_path, str(out), start, end, mode=mode, crf=crf, preset=preset)
+
         written.append({"rank": rank, "path": str(out), "start": start, "end": end,
-                        "start_tc": fmt_ts(start), "end_tc": fmt_ts(end)})
+                        "start_tc": fmt_ts(start), "end_tc": fmt_ts(end),
+                        "captions": bool(burn_captions and words)})
     return written
+
+
+def _clip_words(clip: Dict[str, Any]) -> List[Word]:
+    """Words are stored compactly as [start, end, text] triples."""
+    out: List[Word] = []
+    for item in clip.get("words") or []:
+        try:
+            if isinstance(item, dict):
+                out.append(Word(start=float(item["start"]), end=float(item["end"]),
+                                text=str(item.get("text", ""))))
+            else:
+                out.append(Word(start=float(item[0]), end=float(item[1]), text=str(item[2])))
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
+    return out
+
+
+def write_ass_for_clip(words: Sequence[Word], start: float, end: float,
+                       width: int, height: int, cfg: Dict[str, Any],
+                       path: Path) -> Path:
+    """Build the .ass for one clip, with times rebased to the cut point."""
+    inside = words_in_range(words, start, end)
+    ass = build_ass(inside, width or 1080, height or 1920, cfg, time_offset=start)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # libass reads UTF-8; BOM keeps non-ASCII (accents) safe across tools.
+    path.write_text(ass, encoding="utf-8-sig")
+    return path

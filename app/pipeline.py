@@ -79,8 +79,17 @@ class Job:
             "elapsed": round((self.finished_at or time.time()) - self.started_at, 1),
             "video": self.video,
             # The result is large; only ship it once, on the final poll.
-            "result": self.result if self.status == "done" else None,
+            "result": self._public_result() if self.status == "done" else None,
         }
+
+    def _public_result(self) -> Optional[Dict[str, Any]]:
+        """The result minus per-word timings - the browser has no use for them
+        and they would triple the payload."""
+        if not self.result:
+            return None
+        clips = [{k: v for k, v in c.items() if k != "words"}
+                 for c in self.result.get("clips", [])]
+        return {**self.result, "clips": clips}
 
 
 STAGE_LABELS = {
@@ -417,6 +426,13 @@ class Pipeline:
                 cand.title = (cand.text.split(".")[0] or cand.text)[:70].strip()
             if not cand.hook_line:
                 cand.hook_line = sentences[cand.start_idx].text[:200]
+            # Carry the word timings so captions can be burned in later without
+            # needing the transcript again. Reach one sentence past each edge:
+            # export padding extends the cut beyond the clip's own sentences, and
+            # any speech inside that padding still needs a caption.
+            lo = max(0, cand.start_idx - 1)
+            hi = min(len(sentences) - 1, cand.end_idx + 1)
+            cand.words = [w for s in sentences[lo:hi + 1] for w in s.words]
         if trimmed:
             self.log(f"Trimmed filler/transition lines off {trimmed} clip(s)")
 

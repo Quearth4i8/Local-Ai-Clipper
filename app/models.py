@@ -138,6 +138,10 @@ class Candidate:
     merged_from: int = 1
     rank: int = 0
 
+    # Word timings for this clip, used to render karaoke captions. Kept out of
+    # the browser payload and out of the user-facing JSON export.
+    words: List[Word] = field(default_factory=list)
+
     @property
     def duration(self) -> float:
         return max(0.0, self.end - self.start)
@@ -171,6 +175,7 @@ class Candidate:
             "merged_from": self.merged_from,
             "start_idx": self.start_idx,
             "end_idx": self.end_idx,
+            "words": [[round(w.start, 3), round(w.end, 3), w.text] for w in self.words],
         }
 
 
