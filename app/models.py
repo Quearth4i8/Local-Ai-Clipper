@@ -123,6 +123,7 @@ class Candidate:
     overall: float = 0.0
     heuristic: float = 0.0
     confidence: float = 0.0
+    virality: float = 0.0   # emotion/curiosity/hook-weighted "rage bait" axis, see compute_virality()
 
     # descriptive
     clip_type: str = "other"
@@ -163,6 +164,7 @@ class Candidate:
             "score": round(self.overall, 1),
             "scores": {k: round(float(v), 1) for k, v in self.scores.items()},
             "confidence": round(self.confidence, 2),
+            "virality": round(self.virality, 1),
             "type": self.clip_type,
             "title": self.title,
             "reason": self.reason,

@@ -56,6 +56,30 @@ def blend_scores(llm_score: float, heuristic: float, blend: float) -> float:
     return round((1.0 - blend) * llm_score + blend * heuristic, 2)
 
 
+# Clip types that reliably pull replies, quote-posts and "well actually"
+# comments - the engagement rage bait runs on - beyond what their raw scores
+# already capture.
+VIRALITY_TYPE_BONUS = {
+    "controversial": 12.0, "confrontation": 12.0, "reveal": 8.0,
+    "surprising": 8.0, "emotional": 5.0, "funny": 4.0,
+}
+
+
+def compute_virality(scores: Dict[str, float], clip_type: str) -> float:
+    """How hard a clip grabs a scroll and how likely it is to get people
+    replying/arguing - a different axis than `overall`, which rewards a clean,
+    well-rounded clip. This leans on emotion and curiosity (what makes someone
+    stop and comment) more than editability or standalone-ness, and adds a
+    bonus for clip types that are divisive by nature."""
+    hook_n = scores.get("hook", 0.0) / CATEGORY_MAX["hook"] * 100
+    payoff_n = scores.get("payoff", 0.0) / CATEGORY_MAX["payoff"] * 100
+    emotion_n = scores.get("emotion", 0.0) / CATEGORY_MAX["emotion"] * 100
+    curiosity_n = scores.get("curiosity", 0.0) / CATEGORY_MAX["curiosity"] * 100
+    base = 0.30 * hook_n + 0.20 * payoff_n + 0.28 * emotion_n + 0.22 * curiosity_n
+    bonus = VIRALITY_TYPE_BONUS.get(clip_type, 0.0)
+    return round(min(100.0, base + bonus), 1)
+
+
 # ---------------------------------------------------------------------------
 # Index / duration hygiene
 # ---------------------------------------------------------------------------

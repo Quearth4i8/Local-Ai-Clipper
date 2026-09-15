@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .audio_mix import build_music_graph
+
 log = logging.getLogger("clipfinder.reframe")
 
 # name -> (width, height, label, platforms)
@@ -414,10 +416,64 @@ def crop_x_expression(path: CameraPath, src_w: int, crop_w: int) -> str:
     return "+".join(terms)
 
 
+# name -> (x expression, y expression), relative to the overlay input "W"/"H"
+# (output frame) and the watermark's own "w"/"h", with `M` substituted for the
+# margin in pixels.
+WATERMARK_POSITIONS: Dict[str, Tuple[str, str]] = {
+    "top_left":     ("M", "M"),
+    "top_right":    ("W-w-M", "M"),
+    "bottom_left":  ("M", "H-h-M"),
+    "bottom_right": ("W-w-M", "H-h-M"),
+    "center":       ("(W-w)/2", "(H-h)/2"),
+}
+
+
+def _watermark_overlay(base_chain: str, out_w: int, out_h: int,
+                       watermark: Dict[str, Any]) -> str:
+    """Wrap `base_chain` (a plain -vf chain on input 0) into a filter_complex
+    graph that also scales input 1 (the watermark image) and overlays it.
+
+    Returns a full filter_complex string ending in an output pad named [vout].
+    """
+    scale = max(0.02, min(0.9, float(watermark.get("scale", 0.18) or 0.18)))
+    opacity = max(0.05, min(1.0, float(watermark.get("opacity", 0.85) or 0.85)))
+    margin_ratio = max(0.0, min(0.4, float(watermark.get("margin", 0.04) or 0.04)))
+    wm_w = max(2, int(round(out_w * scale)))
+    margin_px = max(0, int(round(min(out_w, out_h) * margin_ratio)))
+    x_expr, y_expr = WATERMARK_POSITIONS.get(
+        str(watermark.get("position", "top_right")), WATERMARK_POSITIONS["top_right"])
+    x_expr = x_expr.replace("M", str(margin_px))
+    y_expr = y_expr.replace("M", str(margin_px))
+
+    return (
+        f"[0:v]{base_chain}[base];"
+        f"[1:v]scale={wm_w}:-1,format=rgba,colorchannelmixer=aa={opacity:.3f}[wm];"
+        f"[base][wm]overlay=x={x_expr}:y={y_expr}:format=auto[vout]"
+    )
+
+
 def build_filter(src_w: int, src_h: int, fmt: str, path: Optional[CameraPath],
                  layout: str = "crop", subtitle_file: Optional[str] = None,
-                 blur_strength: int = 28) -> Tuple[str, int, int]:
-    """Full -vf chain for one clip. Returns (filter, out_w, out_h).
+                 blur_strength: int = 28,
+                 watermark: Optional[Dict[str, Any]] = None,
+                 music: Optional[Dict[str, Any]] = None,
+                 clip_duration: float = 0.0,
+                 music_offset: float = 0.0,
+                 music_fade_in: bool = True,
+                 music_fade_out: bool = True,
+                 ) -> Tuple[str, int, int, bool, List[str], str]:
+    """Full filter chain for one clip.
+
+    Returns (filter, out_w, out_h, complex, extra_inputs, audio_map):
+    - `complex` is True when `filter` is a filter_complex graph (a watermark
+      or music track is active, either of which needs another input) rather
+      than a plain single-input -vf chain - the caller must pass it through
+      accordingly.
+    - `extra_inputs` is the ordered list of additional -i paths the graph
+      references (watermark image, then music file, in that order) - the
+      caller must add them as FFmpeg inputs in exactly this order.
+    - `audio_map` is what to pass to -map for the audio stream: "0:a?" for
+      an untouched passthrough, or "[aout]" for the music-mixed output pad.
 
     Captions are appended LAST so they are drawn on the final frame - sizing and
     position must follow the output aspect, not the source's.
@@ -464,7 +520,34 @@ def build_filter(src_w: int, src_h: int, fmt: str, path: Optional[CameraPath],
     parts.append("setsar=1")
     if subtitle_file:
         parts.append(f"subtitles={subtitle_file}")
-    return ",".join(parts), out_w, out_h
+    chain = ",".join(parts)
+
+    has_wm = bool(watermark and watermark.get("enabled") and watermark.get("path"))
+    has_music = bool(music and music.get("enabled") and music.get("path"))
+
+    extra_inputs: List[str] = []
+    graph_parts: List[str] = []
+    audio_map = "0:a?"
+
+    if has_wm:
+        graph_parts.append(_watermark_overlay(chain, out_w, out_h, watermark))
+        extra_inputs.append(watermark["path"])
+    elif has_music:
+        # No watermark, but music still needs filter_complex mode - give the
+        # video its own explicit output pad too.
+        graph_parts.append(f"[0:v]{chain}[vout]")
+
+    if has_music:
+        idx = len(extra_inputs) + 1
+        graph_parts.append(build_music_graph(
+            music, clip_duration, idx, offset=music_offset,
+            fade_in=music_fade_in, fade_out=music_fade_out))
+        extra_inputs.append(music["path"])
+        audio_map = "[aout]"
+
+    if graph_parts:
+        return ";".join(graph_parts), out_w, out_h, True, extra_inputs, audio_map
+    return chain, out_w, out_h, False, extra_inputs, audio_map
 
 
 def plan_reframe(ffmpeg_bin: str, src: str, start: float, end: float,

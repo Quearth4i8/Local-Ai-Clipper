@@ -11,14 +11,35 @@ import os
 import threading
 from typing import Optional
 
-FILTER = (
-    "Video files\0*.mp4;*.mkv;*.mov;*.avi;*.webm;*.flv;*.wmv;*.m4v;*.ts;*.mpg;*.mpeg\0"
-    "Audio files\0*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.opus\0"
-    "All files\0*.*\0\0"
-)
+FILTERS = {
+    "video": (
+        "Video files\0*.mp4;*.mkv;*.mov;*.avi;*.webm;*.flv;*.wmv;*.m4v;*.ts;*.mpg;*.mpeg\0"
+        "Audio files\0*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.opus\0"
+        "All files\0*.*\0\0"
+    ),
+    "image": (
+        "Image files\0*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif\0"
+        "All files\0*.*\0\0"
+    ),
+    "audio": (
+        "Audio files\0*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.opus;*.wma\0"
+        "All files\0*.*\0\0"
+    ),
+}
+TK_FILTERS = {
+    "video": [("Video files", "*.mp4 *.mkv *.mov *.avi *.webm *.flv *.m4v"),
+              ("Audio files", "*.mp3 *.wav *.m4a *.flac *.ogg"),
+              ("All files", "*.*")],
+    "image": [("Image files", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"),
+              ("All files", "*.*")],
+    "audio": [("Audio files", "*.mp3 *.wav *.m4a *.aac *.flac *.ogg *.opus"),
+              ("All files", "*.*")],
+}
+TITLES = {"video": "Select a video to analyse", "image": "Select a watermark image",
+          "audio": "Select a background music track"}
 
 
-def _win32_dialog() -> Optional[str]:
+def _win32_dialog(kind: str) -> Optional[str]:
     import ctypes
     from ctypes import wintypes
 
@@ -57,10 +78,10 @@ def _win32_dialog() -> Optional[str]:
     buf = ctypes.create_unicode_buffer(4096)
     ofn = OPENFILENAMEW()
     ofn.lStructSize = ctypes.sizeof(OPENFILENAMEW)
-    ofn.lpstrFilter = FILTER
+    ofn.lpstrFilter = FILTERS.get(kind, FILTERS["video"])
     ofn.lpstrFile = ctypes.cast(buf, wintypes.LPWSTR)
     ofn.nMaxFile = 4096
-    ofn.lpstrTitle = "Select a video to analyse"
+    ofn.lpstrTitle = TITLES.get(kind, TITLES["video"])
     ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR
 
     comdlg32 = ctypes.windll.comdlg32
@@ -69,7 +90,7 @@ def _win32_dialog() -> Optional[str]:
     return None
 
 
-def _tk_dialog() -> Optional[str]:
+def _tk_dialog(kind: str) -> Optional[str]:
     try:
         import tkinter as tk
         from tkinter import filedialog
@@ -80,23 +101,21 @@ def _tk_dialog() -> Optional[str]:
     root.attributes("-topmost", True)
     try:
         path = filedialog.askopenfilename(
-            title="Select a video to analyse",
-            filetypes=[("Video files", "*.mp4 *.mkv *.mov *.avi *.webm *.flv *.m4v"),
-                       ("Audio files", "*.mp3 *.wav *.m4a *.flac *.ogg"),
-                       ("All files", "*.*")],
+            title=TITLES.get(kind, TITLES["video"]),
+            filetypes=TK_FILTERS.get(kind, TK_FILTERS["video"]),
         )
     finally:
         root.destroy()
     return path or None
 
 
-def pick_file(timeout: float = 300.0) -> Optional[str]:
+def pick_file(timeout: float = 300.0, kind: str = "video") -> Optional[str]:
     """Open a modal picker on a worker thread and return the chosen path."""
     result: dict = {}
 
     def worker():
         try:
-            result["path"] = _win32_dialog() if os.name == "nt" else _tk_dialog()
+            result["path"] = _win32_dialog(kind) if os.name == "nt" else _tk_dialog(kind)
         except Exception as exc:  # noqa: BLE001
             result["error"] = str(exc)
 

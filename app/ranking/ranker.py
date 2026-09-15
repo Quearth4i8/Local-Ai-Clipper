@@ -231,6 +231,61 @@ def select_diverse(cands: List[Candidate], target_count: int,
     return chosen
 
 
+# ---------------------------------------------------------------------------
+# 4. Compilation ordering - arrange several clips into one retention-optimised cut
+# ---------------------------------------------------------------------------
+def _virality_of(clip: Dict[str, Any]) -> float:
+    v = clip.get("virality")
+    return float(v) if v else float(clip.get("score", 0.0))
+
+
+def _avoid_same_type_adjacent(clips: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Swap a clip forward when it shares a type with the one right before it -
+    back-to-back "confrontation" clips feel repetitive even when both are strong."""
+    out = list(clips)
+    for i in range(1, len(out)):
+        if out[i].get("type") != out[i - 1].get("type"):
+            continue
+        for j in range(i + 1, len(out)):
+            if out[j].get("type") != out[i - 1].get("type"):
+                out[i], out[j] = out[j], out[i]
+                break
+    return out
+
+
+def arrange_for_retention(clips: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Order a set of already-selected clips into the shape of one compilation
+    video built to hold attention start to finish.
+
+    Opens on the single most attention-grabbing clip (the scroll-stopper),
+    closes on the biggest payoff (the reward for watching to the end), and
+    zig-zags the middle between higher- and lower-energy moments instead of
+    letting virality decline in a straight line, which is what causes viewers
+    to drop off partway through a compilation.
+    """
+    pool = list(clips)
+    if len(pool) <= 2:
+        return sorted(pool, key=lambda c: -_virality_of(c))
+
+    ranked = sorted(pool, key=lambda c: -_virality_of(c))
+    opener, rest = ranked[0], ranked[1:]
+    closer = max(rest, key=lambda c: (c.get("scores") or {}).get("payoff", 0.0))
+    rest = [c for c in rest if c is not closer]
+
+    rest.sort(key=lambda c: -_virality_of(c))
+    middle: List[Dict[str, Any]] = []
+    lo, hi = 0, len(rest) - 1
+    take_high = True
+    while lo <= hi:
+        if take_high:
+            middle.append(rest[lo]); lo += 1
+        else:
+            middle.append(rest[hi]); hi -= 1
+        take_high = not take_high
+
+    return [opener, *_avoid_same_type_adjacent(middle), closer]
+
+
 def type_breakdown(cands: Sequence[Candidate]) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for c in cands:

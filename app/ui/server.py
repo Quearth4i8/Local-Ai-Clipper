@@ -21,13 +21,18 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
 from .. import APP_NAME, __version__
+from ..analytics.store import PerformanceStore
 from ..cache.store import CacheStore
 from ..config import Config, load_config
-from ..export.exporters import (_clip_words, export_clips, to_csv, to_json, to_text,
-                                write_all, write_ass_for_clip)
+from ..export.exporters import (_clip_words, export_clips, export_compilation,
+                                normalize_music, normalize_watermark, to_csv, to_json,
+                                to_text, write_all, write_ass_for_clip)
+from ..export.metadata import write_metadata_for_clips
+from ..export.thumbnail import pil_available
 from ..llm.base import get_backend
 from ..models import fmt_ts
 from ..pipeline import JobManager, Pipeline, run_job
+from ..ranking.ranker import arrange_for_retention
 from ..transcription.cuda_setup import cuda_available
 from ..video.ffmpeg_tools import FFmpeg, FFmpegError, is_media_file
 from ..video.reframe import (FORMATS, build_filter, plan_reframe,
@@ -42,6 +47,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 app = FastAPI(title=APP_NAME, version=__version__, docs_url=None, redoc_url=None)
 jobs = JobManager()
 CFG: Config = load_config()
+PERF = PerformanceStore(CFG.performance_db)
 
 
 def ffmpeg() -> FFmpeg:
@@ -90,6 +96,32 @@ class ExportClipsBody(BaseModel):
     captions: Optional[bool] = None
     formats: Optional[List[Any]] = None
     layout: Optional[str] = None
+    generate_metadata: Optional[bool] = None
+    campaign_rules: Optional[str] = None
+    watermark: Optional[bool] = None
+    tighten: Optional[bool] = None
+    thumbnail: Optional[bool] = None
+    music: Optional[bool] = None
+
+    @field_validator("formats", mode="before")
+    @classmethod
+    def _fmts(cls, v):  # noqa: N805
+        return _clean_formats(v)
+
+
+class ExportCompilationBody(BaseModel):
+    job_id: str
+    ranks: Optional[List[int]] = None
+    max_clips: int = 6
+    captions: Optional[bool] = None
+    formats: Optional[List[Any]] = None
+    layout: Optional[str] = None
+    name: Optional[str] = None
+    generate_metadata: Optional[bool] = None
+    campaign_rules: Optional[str] = None
+    watermark: Optional[bool] = None
+    tighten: Optional[bool] = None
+    music: Optional[bool] = None
 
     @field_validator("formats", mode="before")
     @classmethod
@@ -104,11 +136,34 @@ class CaptionPreviewBody(BaseModel):
     format: Optional[str] = None
     layout: Optional[str] = None
     captions: bool = True
+    watermark: Optional[bool] = None
+    music: Optional[bool] = None
 
 
 class ConfigBody(BaseModel):
     config: Dict[str, Any]
     save: bool = True
+
+
+class PerformanceBody(BaseModel):
+    job_id: Optional[str] = None
+    rank: Optional[str] = None
+    video_hash: Optional[str] = None
+    video_name: Optional[str] = None
+    title: Optional[str] = None
+    clip_type: Optional[str] = None
+    duration: Optional[float] = None
+    scores: Optional[Dict[str, float]] = None
+    overall: Optional[float] = None
+    virality: Optional[float] = None
+    platform: str = "other"
+    views: int = 0
+    likes: int = 0
+    comments: int = 0
+    shares: int = 0
+    rating: Optional[float] = None
+    notes: Optional[str] = None
+    posted_at: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +202,7 @@ def health() -> Dict[str, Any]:
         "cuda": {"ok": cuda_available()},
         "llm": llm,
         "whisper": {"model": CFG.get("whisper.model"), "device": CFG.get("whisper.device")},
+        "pillow": {"ok": pil_available()},
         "config": CFG.to_dict(),
     }
 
@@ -176,6 +232,32 @@ def browse() -> Dict[str, Any]:
     if not path:
         return {"cancelled": True}
     return probe_path(PathBody(path=path))
+
+
+@app.post("/api/browse_image")
+def browse_image() -> Dict[str, Any]:
+    try:
+        path = pick_file(kind="image")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"Could not open the file picker: {exc}")
+    if not path:
+        return {"cancelled": True}
+    if not Path(path).is_file():
+        raise HTTPException(404, f"File not found: {path}")
+    return {"cancelled": False, "path": path}
+
+
+@app.post("/api/browse_audio")
+def browse_audio() -> Dict[str, Any]:
+    try:
+        path = pick_file(kind="audio")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"Could not open the file picker: {exc}")
+    if not path:
+        return {"cancelled": True}
+    if not Path(path).is_file():
+        raise HTTPException(404, f"File not found: {path}")
+    return {"cancelled": False, "path": path}
 
 
 @app.post("/api/video")
@@ -270,6 +352,79 @@ def export_inline(job_id: str, fmt: str):
     raise HTTPException(400, "Unsupported format")
 
 
+def _watermark_cfg(override: Optional[bool]) -> Dict[str, Any]:
+    """The saved watermark settings, with just `enabled` overridable per export
+    request (the image/position/size are configured once, not per click)."""
+    wm = dict(CFG.section("watermark"))
+    if override is not None:
+        wm["enabled"] = bool(override)
+    return wm
+
+
+def _tighten_cfg(override: Optional[bool]) -> Dict[str, Any]:
+    tg = dict(CFG.section("tightening"))
+    if override is not None:
+        tg["enabled"] = bool(override)
+    return tg
+
+
+def _thumbnail_cfg(override: Optional[bool]) -> Dict[str, Any]:
+    th = dict(CFG.section("thumbnail"))
+    if override is not None:
+        th["enabled"] = bool(override)
+    return th
+
+
+def _music_cfg(override: Optional[bool]) -> Dict[str, Any]:
+    mu = dict(CFG.section("music"))
+    if override is not None:
+        mu["enabled"] = bool(override)
+    return mu
+
+
+def _maybe_write_metadata(result: Dict[str, Any], clips: List[Dict[str, Any]],
+                          folder: Path, want: Optional[bool],
+                          campaign_rules: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Write a `<clip>_metadata.txt` per clip. Never raises - a metadata miss
+    is a lesser outcome than losing the clips themselves - but always reports
+    back what happened (or why nothing was written) so the caller can tell
+    the user, instead of a silent no-op.
+    """
+    camp = CFG.section("campaign")
+    if want is None:
+        want = bool(camp.get("generate_metadata", False))
+    if not want:
+        return None
+    rules = campaign_rules if campaign_rules is not None else str(camp.get("rules", ""))
+    try:
+        backend = get_backend(CFG.section("llm"))
+        health = backend.health()
+        if not health.get("ok"):
+            msg = f"Metadata skipped: local LLM unreachable ({health.get('error') or 'offline'})"
+            log.warning(msg)
+            return {"requested": len(clips), "written": [], "failed": [], "error": msg}
+        if health.get("model_installed") is False:
+            msg = f"Metadata skipped: {health.get('error') or 'model not installed'}"
+            log.warning(msg)
+            return {"requested": len(clips), "written": [], "failed": [], "error": msg}
+    except Exception as exc:  # noqa: BLE001
+        msg = f"Metadata skipped: {exc}"
+        log.warning(msg)
+        return {"requested": len(clips), "written": [], "failed": [], "error": msg}
+
+    language = str(result.get("language") or CFG.get("general.language") or "en")
+    try:
+        outcome = write_metadata_for_clips(backend, clips, folder, language=language,
+                                           campaign_rules=rules, on_log=log.info)
+        log.info("Wrote metadata for %d/%d clip(s)", len(outcome["written"]), len(clips))
+        return {"requested": len(clips), "written": outcome["written"],
+                "failed": outcome["failed"], "error": None}
+    except Exception as exc:  # noqa: BLE001
+        msg = f"Metadata generation failed: {exc}"
+        log.warning(msg)
+        return {"requested": len(clips), "written": [], "failed": [], "error": msg}
+
+
 @app.post("/api/export_clips")
 def export_clips_endpoint(body: ExportClipsBody) -> Dict[str, Any]:
     result = _result_of(body.job_id)
@@ -304,12 +459,82 @@ def export_clips_endpoint(body: ExportClipsBody) -> Dict[str, Any]:
             formats=formats,
             layout=str(body.layout or rf.get("layout", "crop")),
             sample_fps=float(rf.get("sample_fps", 3.0)),
+            watermark=_watermark_cfg(body.watermark),
+            tighten=_tighten_cfg(body.tighten),
+            thumbnail=_thumbnail_cfg(body.thumbnail),
+            music=_music_cfg(body.music),
             on_log=log.info,
         )
     except FFmpegError as exc:
         raise HTTPException(500, str(exc))
-    return {"ok": True, "clips": written,
-            "folder": str(Path(written[0]["path"]).parent) if written else str(CFG.output_dir)}
+    folder = Path(written[0]["path"]).parent if written else CFG.output_dir
+    metadata = _maybe_write_metadata(result, clips, folder, body.generate_metadata,
+                                     body.campaign_rules)
+    return {"ok": True, "clips": written, "folder": str(folder), "metadata": metadata}
+
+
+@app.post("/api/export_compilation")
+def export_compilation_endpoint(body: ExportCompilationBody) -> Dict[str, Any]:
+    """Stitch several clips into ONE viral-format video, auto-arranged to open
+    on the strongest hook, close on the biggest payoff, and keep the middle
+    from sagging in between."""
+    result = _result_of(body.job_id)
+    clips = result.get("clips", [])
+    if body.ranks:
+        wanted = set(body.ranks)
+        clips = [c for c in clips if c.get("rank") in wanted]
+    else:
+        # No explicit picks - take the highest-virality moments so this works
+        # as a one-click action, not just for a pre-selected set.
+        clips = sorted(clips, key=lambda c: -(c.get("virality") or c.get("score", 0)))
+        clips = clips[: max(2, int(body.max_clips))]
+    if len(clips) < 2:
+        raise HTTPException(400, "Pick at least 2 clips to build a compilation")
+
+    ordered = arrange_for_retention(clips)
+
+    video = result.get("video", {})
+    exp = CFG.section("export")
+    caps = dict(CFG.section("captions"))
+    if body.captions is not None:
+        caps["enabled"] = bool(body.captions)
+    rf = CFG.section("reframe")
+    formats = body.formats or rf.get("formats") or ["9:16"]
+    name = body.name or f"{Path(video.get('filename', 'clips')).stem}_viral_cut"
+    try:
+        written = export_compilation(
+            ffmpeg(), video.get("path"), ordered, CFG.output_dir,
+            name=name,
+            pad_start=float(exp.get("padding_start", 0.15)),
+            pad_end=float(exp.get("padding_end", 0.35)),
+            video_duration=float(video.get("duration", 0) or 0),
+            captions=caps,
+            video_width=int(video.get("width", 0) or 0),
+            video_height=int(video.get("height", 0) or 0),
+            encoder=str(exp.get("encoder", "auto")),
+            formats=formats,
+            layout=str(body.layout or rf.get("layout", "crop")),
+            sample_fps=float(rf.get("sample_fps", 3.0)),
+            watermark=_watermark_cfg(body.watermark),
+            tighten=_tighten_cfg(body.tighten),
+            music=_music_cfg(body.music),
+            on_log=log.info,
+        )
+    except FFmpegError as exc:
+        raise HTTPException(500, str(exc))
+    folder = Path(written[0]["path"]).parent if written else CFG.output_dir
+    # The compilation is ONE video stitched from several clips, so it gets ONE
+    # metadata doc describing the whole thing rather than one per source clip.
+    combo = {
+        "rank": "compilation", "title": name,
+        "start_tc": "", "end_tc": "",
+        "duration": sum(float(c.get("duration", 0) or 0) for c in ordered),
+        "type": "compilation",
+        "transcript": " ".join(str(c.get("transcript", "")) for c in ordered),
+    }
+    metadata = _maybe_write_metadata(result, [combo], folder, body.generate_metadata,
+                                     body.campaign_rules)
+    return {"ok": True, "files": written, "folder": str(folder), "metadata": metadata}
 
 
 @app.post("/api/caption_preview")
@@ -338,6 +563,8 @@ def caption_preview(body: CaptionPreviewBody):
     src_h = int(video.get("height", 0) or 0)
     fmt = body.format or (rf.get("formats") or ["9:16"])[0]
     layout = str(body.layout or rf.get("layout", "crop"))
+    watermark = normalize_watermark(_watermark_cfg(body.watermark))
+    music = normalize_music(_music_cfg(body.music))
 
     tmp = Path(tempfile.mkdtemp(prefix="capprev_"))
     out = tmp / "preview.mp4"
@@ -348,13 +575,16 @@ def caption_preview(body: CaptionPreviewBody):
                             on_log=log.info)
         sub = None
         if caps["enabled"]:
-            _, ow, oh = build_filter(src_w, src_h, fmt, path, layout=layout)
+            _, ow, oh, _, _, _ = build_filter(src_w, src_h, fmt, path, layout=layout)
             write_ass_for_clip(_clip_words(clip), start, end, ow, oh, caps, tmp / "p.ass")
             sub = "p.ass"
-        vf, _, _ = build_filter(src_w, src_h, fmt, path, layout=layout,
-                                subtitle_file=sub)
+        vf, _, _, use_fc, extra_inputs, audio_map = build_filter(
+            src_w, src_h, fmt, path, layout=layout, subtitle_file=sub,
+            watermark=watermark, music=music, clip_duration=end - start)
         ffmpeg().render(video.get("path"), str(out), start, end, vf=vf,
-                        work_dir=str(tmp), encoder=str(exp.get("encoder", "auto")))
+                        work_dir=str(tmp), encoder=str(exp.get("encoder", "auto")),
+                        extra_inputs=extra_inputs, filter_complex=use_fc,
+                        audio_map=audio_map)
     except FFmpegError as exc:
         shutil.rmtree(tmp, ignore_errors=True)
         raise HTTPException(500, str(exc))
@@ -490,6 +720,58 @@ def thumb(path: str, at: float = 0.0):
         if not ffmpeg().thumbnail(str(p), at, str(out)):
             raise HTTPException(500, "Could not generate thumbnail")
     return FileResponse(str(out), media_type="image/jpeg")
+
+
+# ---------------------------------------------------------------------------
+# Performance tracking - log how exported clips actually did, and surface
+# which score categories correlate with real engagement.
+# ---------------------------------------------------------------------------
+def _clip_snapshot(job_id: Optional[str], rank: Optional[str]) -> Dict[str, Any]:
+    """Best-effort clip metadata (title/type/scores/...) so a logged entry is
+    still self-describing even after the job is pruned from memory."""
+    if not job_id or rank is None:
+        return {}
+    job = jobs.get(job_id)
+    if not job or not job.result:
+        return {}
+    clip = next((c for c in job.result.get("clips", []) if str(c.get("rank")) == str(rank)), None)
+    if not clip:
+        return {}
+    video = job.result.get("video", {})
+    return {
+        "video_hash": job.result.get("stats", {}).get("video_hash"),
+        "video_name": video.get("filename"),
+        "title": clip.get("title"),
+        "clip_type": clip.get("type"),
+        "duration": clip.get("duration"),
+        "scores": clip.get("scores"),
+        "overall": clip.get("score"),
+        "virality": clip.get("virality"),
+    }
+
+
+@app.post("/api/performance")
+def log_performance(body: PerformanceBody) -> Dict[str, Any]:
+    data = {k: v for k, v in body.model_dump().items() if v is not None}
+    snapshot = _clip_snapshot(body.job_id, body.rank)
+    entry = {**snapshot, **data}   # explicit request fields win over the snapshot
+    entry_id = PERF.log(entry)
+    return {"ok": True, "id": entry_id}
+
+
+@app.get("/api/performance")
+def list_performance(video_hash: Optional[str] = None) -> Dict[str, Any]:
+    return {"entries": PERF.list(video_hash=video_hash)}
+
+
+@app.delete("/api/performance/{entry_id}")
+def delete_performance(entry_id: int) -> Dict[str, Any]:
+    return {"ok": PERF.delete(entry_id)}
+
+
+@app.get("/api/performance/insights")
+def performance_insights() -> Dict[str, Any]:
+    return PERF.insights(current_weights=CFG.weights)
 
 
 # ---------------------------------------------------------------------------

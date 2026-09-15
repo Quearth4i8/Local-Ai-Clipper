@@ -16,8 +16,8 @@ from .config import Config
 from .llm.base import LLMBackend, get_backend
 from .models import AnalysisResult, Candidate, Sentence, Transcript, VideoInfo
 from .ranking.ranker import dedupe, second_pass, select_diverse, type_breakdown
-from .scoring.scorer import (analyze_block, apply_padding, heuristic_only_scores,
-                             optimize_boundaries, trim_edges)
+from .scoring.scorer import (analyze_block, apply_padding, compute_virality,
+                             heuristic_only_scores, optimize_boundaries, trim_edges)
 from .segmentation.segmenter import build_sentences, split_into_blocks, topic_shift_scores
 from .transcription.whisper_engine import WhisperEngine
 from .video.ffmpeg_tools import FFmpeg, FFmpegError
@@ -434,6 +434,7 @@ class Pipeline:
             if trim_edges(cand, sentences, float(clips_cfg.get("min_duration", 20))):
                 trimmed += 1
             apply_padding(cand, sentences)
+            cand.virality = compute_virality(cand.scores, cand.clip_type)
             if not cand.title:
                 cand.title = (cand.text.split(".")[0] or cand.text)[:70].strip()
             if not cand.hook_line:

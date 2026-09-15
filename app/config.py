@@ -126,6 +126,49 @@ DEFAULTS: Dict[str, Any] = {
         "port": 8420,
         "open_browser": True,
     },
+    "campaign": {
+        # Free-text brief (naming rules, tone, required mentions/hashtags, ...)
+        # the metadata generator is instructed to follow when exporting clips.
+        "rules": "",
+        "generate_metadata": False,
+    },
+    "watermark": {
+        # Optional logo/bug burned into the top of exported clips - only used
+        # when a campaign requires one. Off and pathless by default.
+        "enabled": False,
+        "path": "",
+        "opacity": 0.85,       # 0..1
+        "scale": 0.18,         # watermark width, as a fraction of the output frame width
+        "margin": 0.04,        # gap from the frame edge, as a fraction of min(width, height)
+        "position": "top_right",   # top_right | top_left | bottom_right | bottom_left | center
+    },
+    "tightening": {
+        # Jump-cut editing: shorten long pauses and drop filler words ("um",
+        # "uh"...) using the word-level transcript already captured by Whisper.
+        # A pause under min_gap is never touched - only the excess above
+        # keep_pause on a LONGER pause is removed, so pacing stays natural.
+        "enabled": False,
+        "remove_fillers": True,
+        "min_gap": 0.6,        # seconds - pauses shorter than this are left alone
+        "keep_pause": 0.35,    # seconds - how much of a long pause survives the cut
+    },
+    "thumbnail": {
+        # Auto-generated cover image per exported clip: the strongest detected
+        # frame (usually the best face shot) with the hook line burned on top.
+        "enabled": False,
+        "text_color": "#FFFFFF",
+        "outline_color": "#000000",
+        "uppercase": True,
+    },
+    "music": {
+        # Background music, mixed in quietly under the clip's own audio - off
+        # and pathless by default. The track loops if shorter than the clip
+        # and stays continuous across a tightened clip's internal jump cuts.
+        "enabled": False,
+        "path": "",
+        "volume": 0.15,        # 0..1, loudness of the music relative to itself (not a mix ratio)
+        "fade_seconds": 0.6,   # fade-in/out at the very start/end of the clip
+    },
 }
 
 SCORE_KEYS = ("hook", "payoff", "emotion", "curiosity", "standalone", "editability")
@@ -182,6 +225,11 @@ class Config:
         return p
 
     @property
+    def performance_db(self) -> Path:
+        """Local SQLite file tracking how exported clips actually performed."""
+        return self.cache_dir / "performance.sqlite3"
+
+    @property
     def fonts_dir(self) -> Optional[Path]:
         """Drop-in folder for caption fonts; None when it holds no font files."""
         raw = self.get("captions.fonts_dir", "")
@@ -228,6 +276,37 @@ class Config:
             rf["formats"] = clean or list(DEFAULTS["reframe"]["formats"])
             if str(rf.get("layout", "crop")) not in ("crop", "fit_blur"):
                 rf["layout"] = "crop"
+
+        wm = self.data.get("watermark")
+        if isinstance(wm, dict):
+            positions = ("top_left", "top_right", "bottom_left", "bottom_right", "center")
+            if str(wm.get("position", "top_right")) not in positions:
+                wm["position"] = "top_right"
+            for key, lo, hi in (("opacity", 0.05, 1.0), ("scale", 0.02, 0.9), ("margin", 0.0, 0.4)):
+                try:
+                    wm[key] = max(lo, min(hi, float(wm.get(key, DEFAULTS["watermark"][key]))))
+                except (TypeError, ValueError):
+                    wm[key] = DEFAULTS["watermark"][key]
+
+        mu = self.data.get("music")
+        if isinstance(mu, dict):
+            for key, lo, hi in (("volume", 0.0, 1.0), ("fade_seconds", 0.0, 2.0)):
+                try:
+                    mu[key] = max(lo, min(hi, float(mu.get(key, DEFAULTS["music"][key]))))
+                except (TypeError, ValueError):
+                    mu[key] = DEFAULTS["music"][key]
+
+        tg = self.data.get("tightening")
+        if isinstance(tg, dict):
+            for key, lo, hi in (("min_gap", 0.15, 5.0), ("keep_pause", 0.0, 3.0)):
+                try:
+                    tg[key] = max(lo, min(hi, float(tg.get(key, DEFAULTS["tightening"][key]))))
+                except (TypeError, ValueError):
+                    tg[key] = DEFAULTS["tightening"][key]
+            # A kept pause longer than the trigger threshold would be a no-op
+            # dressed up as a feature - keep it strictly shorter.
+            if tg["keep_pause"] >= tg["min_gap"]:
+                tg["keep_pause"] = max(0.0, tg["min_gap"] - 0.1)
 
         weights = self.data.get("scoring", {}).get("weights")
         if isinstance(weights, dict):

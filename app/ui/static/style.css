@@ -133,6 +133,12 @@ main { max-width: 1680px; margin: 0 auto; padding: 24px clamp(16px, 3vw, 40px) 9
   box-shadow: 0 8px 20px rgba(255,122,61,.26);
 }
 .btn.primary:hover { box-shadow: 0 12px 26px rgba(255,122,61,.34); }
+.btn.accent {
+  background: linear-gradient(140deg, #ff8a5c, var(--red));
+  border-color: transparent; color: #2a0a0d;
+  box-shadow: 0 8px 20px rgba(255,95,109,.28);
+}
+.btn.accent:hover { box-shadow: 0 12px 26px rgba(255,95,109,.38); }
 .btn.ghost { background: transparent; }
 .btn.ghost:hover { background: var(--surface-2); }
 .btn.danger { color: var(--red); border-color: color-mix(in srgb, var(--red) 35%, transparent); background: transparent; }
@@ -152,6 +158,10 @@ main { max-width: 1680px; margin: 0 auto; padding: 24px clamp(16px, 3vw, 40px) 9
 .chip {
   font-size: 11.5px; padding: 3px 9px; border-radius: 7px;
   background: var(--bg-2); border: 1px solid var(--line); color: var(--text-dim);
+}
+.chip.viral {
+  color: var(--red); border-color: color-mix(in srgb, var(--red) 35%, transparent);
+  background: color-mix(in srgb, var(--red) 12%, transparent); font-weight: 700;
 }
 .analyze-row {
   display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px;
@@ -273,6 +283,58 @@ main { max-width: 1680px; margin: 0 auto; padding: 24px clamp(16px, 3vw, 40px) 9
 }
 .menu button:hover { background: var(--surface-2); }
 .menu hr { border: 0; border-top: 1px solid var(--line-soft); margin: 5px 4px; }
+
+/* -------------------------------------------------------- campaign rules */
+.campaign-box {
+  background: var(--surface); border: 1px solid var(--line);
+  border-left: 3px solid var(--accent); border-radius: var(--radius);
+  margin-bottom: 14px; overflow: hidden;
+}
+.campaign-toggle {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 12px 16px; background: none; border: 0; cursor: pointer;
+  font-size: 13px; font-weight: 650; color: var(--text);
+}
+.campaign-toggle .campaign-state {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-faint); background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: 99px; padding: 2px 9px;
+}
+.campaign-toggle .campaign-state.on { color: var(--accent); border-color: var(--accent); }
+.campaign-toggle .chev { margin-left: auto; color: var(--text-faint); transition: .18s var(--ease); }
+.campaign-toggle[aria-expanded="true"] .chev { transform: rotate(180deg); }
+.campaign-body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+.campaign-body textarea {
+  width: 100%; resize: vertical; min-height: 90px; padding: 10px 12px;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 9px;
+  color: var(--text); font-size: 13px; font-family: inherit; outline: none;
+}
+.campaign-body textarea:focus { border-color: var(--accent); }
+
+.watermark-box {
+  border-top: 1px solid var(--line-soft); padding-top: 12px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.watermark-controls { display: flex; flex-direction: column; gap: 12px; padding-left: 22px; }
+.wm-file-row { display: flex; align-items: center; gap: 10px; }
+.wm-file-row input[type="text"] {
+  flex: 1; min-width: 0; padding: 8px 10px; background: var(--bg-2);
+  border: 1px solid var(--line); border-radius: 8px; color: var(--text); font-size: 12.5px;
+}
+.wm-thumb-wrap {
+  flex: none; width: 44px; height: 44px; border-radius: 8px; overflow: hidden;
+  background: repeating-conic-gradient(#8884 0% 25%, transparent 0% 50%) 0 0/12px 12px;
+  border: 1px solid var(--line); display: grid; place-items: center;
+}
+.wm-thumb { width: 100%; height: 100%; object-fit: contain; }
+.wm-thumb-empty { font-size: 9px; color: var(--text-faint); text-align: center; }
+.wm-opts { display: flex; gap: 18px; flex-wrap: wrap; }
+.wm-opts label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-faint); display: flex; flex-direction: column; gap: 5px; min-width: 120px; }
+.wm-opts select {
+  padding: 7px 9px; border-radius: 8px; background: var(--bg-2); border: 1px solid var(--line);
+  color: var(--text); font-size: 12.5px; text-transform: none; letter-spacing: 0;
+}
 
 /* ---------------------------------------------------------- format picker */
 .format-bar {
@@ -459,6 +521,42 @@ main { max-width: 1680px; margin: 0 auto; padding: 24px clamp(16px, 3vw, 40px) 9
   background: var(--bg-2); border-left: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
   padding: 12px 14px; border-radius: 0 10px 10px 0; max-height: 34vh; overflow: auto;
 }
+
+/* ----------------------------------------------------------- performance */
+.perf-box { display: flex; flex-direction: column; gap: 9px; }
+.perf-history { display: flex; flex-direction: column; gap: 5px; max-height: 110px; overflow: auto; }
+.perf-entry {
+  display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-dim);
+  background: var(--bg-2); border-radius: 8px; padding: 6px 9px;
+}
+.perf-entry .plat { flex: none; text-transform: capitalize; font-weight: 600; color: var(--text); }
+.perf-entry .stats { flex: 1; color: var(--text-faint); }
+.perf-entry button { flex: none; background: none; border: 0; color: var(--text-faint);
+  cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 4px; }
+.perf-entry button:hover { color: var(--accent-2); }
+.perf-form { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 7px; }
+.perf-form select, .perf-form input {
+  padding: 7px 8px; border-radius: 8px; background: var(--bg-2); border: 1px solid var(--line);
+  color: var(--text); font-size: 12px; outline: none; min-width: 0;
+}
+.perf-form .perf-notes { grid-column: 1 / -1; }
+.perf-form button { grid-column: 1 / -1; }
+
+/* -------------------------------------------------------------- insights */
+.insight-row {
+  display: flex; align-items: center; gap: 10px; font-size: 12.5px; padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.insight-row b { flex: none; width: 90px; color: var(--text); text-transform: capitalize; }
+.insight-row .track { flex: 1; height: 8px; border-radius: 99px; background: var(--bg-2); position: relative; overflow: hidden; }
+.insight-row .track .zero { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--line); }
+.insight-row .track .fill { position: absolute; top: 0; bottom: 0; border-radius: 99px; }
+.insight-row .track .fill.pos { left: 50%; background: linear-gradient(90deg, var(--accent), var(--violet)); }
+.insight-row .track .fill.neg { right: 50%; background: var(--accent-2); }
+.insight-row .note { flex: none; width: 210px; color: var(--text-faint); font-size: 11px; }
+.insight-type-row { display: flex; justify-content: space-between; font-size: 12.5px;
+  padding: 5px 0; color: var(--text-dim); }
+.insight-type-row b { color: var(--text); text-transform: capitalize; }
 
 /* ----------------------------------------------------------------- modal */
 .modal {

@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 from ..models import VideoInfo
 
@@ -188,6 +188,47 @@ class FFmpeg:
             raise FFmpegError(proc.stderr.decode("utf-8", "ignore")[-500:])
         return str(out)
 
+    # --------------------------------------------------------- concatenation
+    def concat(self, segments: List[str], out: str) -> str:
+        """Join pre-rendered segments into one file.
+
+        Every segment here comes from `render()` with the same encoder
+        settings and target resolution, so a lossless stream-copy concat
+        normally just works. If the segments' parameters ever diverge enough
+        that the demuxer refuses, fall back to a re-encoding concat once.
+        """
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        fd, list_path = tempfile.mkstemp(prefix="concat_", suffix=".txt")
+        os.close(fd)
+        try:
+            lines = "\n".join(f"file '{Path(s).resolve().as_posix()}'" for s in segments)
+            Path(list_path).write_text(lines, encoding="utf-8")
+
+            args = [
+                self.ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "concat", "-safe", "0", "-i", str(list_path),
+                "-c", "copy", "-movflags", "+faststart", str(out),
+            ]
+            proc = self._run(args)
+            if proc.returncode != 0 or not Path(out).exists():
+                args = [
+                    self.ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                    "-f", "concat", "-safe", "0", "-i", str(list_path),
+                    *self.pick_encoder("auto"), "-c:a", "aac", "-b:a", "192k",
+                    "-movflags", "+faststart", str(out),
+                ]
+                proc = self._run(args)
+                if proc.returncode != 0 or not Path(out).exists():
+                    raise FFmpegError(
+                        f"Concat failed: {proc.stderr.decode('utf-8', 'ignore')[-500:]}"
+                    )
+        finally:
+            try:
+                os.remove(list_path)
+            except OSError:
+                pass
+        return str(out)
+
     # ------------------------------------------------------ caption burning
     def has_encoder(self, name: str) -> bool:
         try:
@@ -207,20 +248,40 @@ class FFmpeg:
         return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p"]
 
     def render(self, src: str, out: str, start: float, end: float, *,
-               vf: str, work_dir: str, encoder: str = "auto") -> str:
+               vf: str, work_dir: str, encoder: str = "auto",
+               extra_inputs: Optional[Sequence[str]] = None,
+               filter_complex: bool = False,
+               audio_map: str = "0:a?") -> str:
         """Re-encode [start, end] through an arbitrary filter chain.
 
         Runs with cwd=work_dir so any file referenced inside the filter graph
         (a subtitle file) can be a bare ASCII name - Windows paths contain ':'
         and '\\', which are filtergraph syntax.
+
+        `extra_inputs` adds further (static) inputs - a watermark image, a
+        music track - ahead of `-t`, so `-t` still limits the OUTPUT rather
+        than being read as an input option for the last of them. Each is
+        appended in order (input 1, 2, ...), matching the index the filter
+        graph in `vf` must reference. `filter_complex` must be set whenever
+        `vf` is a labelled filter_complex graph (ending in `[vout]`, and
+        optionally `[aout]`) rather than a plain single-input -vf chain;
+        `audio_map` then picks the audio stream - "0:a?" for an untouched
+        passthrough, "[aout]" for a music-mixed output pad.
         """
         duration = max(0.2, end - start)
         Path(out).parent.mkdir(parents=True, exist_ok=True)
         args = [
             self.ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
             "-ss", f"{max(0.0, start):.3f}", "-i", str(Path(src).resolve()),
-            "-t", f"{duration:.3f}",
-            "-vf", vf,
+        ]
+        for extra in (extra_inputs or []):
+            args += ["-i", str(Path(extra).resolve())]
+        args += ["-t", f"{duration:.3f}"]
+        if filter_complex:
+            args += ["-filter_complex", vf, "-map", "[vout]", "-map", audio_map]
+        else:
+            args += ["-vf", vf]
+        args += [
             *self.pick_encoder(encoder),
             "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart",
@@ -234,7 +295,8 @@ class FFmpeg:
             err = proc.stderr.decode("utf-8", "ignore")[-700:]
             if "h264_nvenc" in " ".join(args):
                 return self.render(src, out, start, end, vf=vf, work_dir=work_dir,
-                                   encoder="libx264")
+                                   encoder="libx264", extra_inputs=extra_inputs,
+                                   filter_complex=filter_complex, audio_map=audio_map)
             # Never leave a 0-byte file behind looking like a successful export.
             if target.exists() and wrote_nothing:
                 try:
@@ -242,6 +304,34 @@ class FFmpeg:
                 except OSError:
                     pass
             raise FFmpegError(f"Render failed: {err or 'no data was written'}")
+        return str(out)
+
+    def frame(self, src: str, out: str, at: float, *, vf: Optional[str] = None,
+              extra_input: Optional[str] = None, filter_complex: bool = False) -> str:
+        """Extract ONE filtered frame at `at` seconds - used for thumbnails.
+
+        Same `extra_input`/`filter_complex` convention as `render()`: pass
+        both together when `vf` is a labelled filter_complex graph (e.g. a
+        watermark overlay) rather than a plain single-input -vf chain.
+        """
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        args = [
+            self.ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", f"{max(0.0, at):.3f}", "-i", str(Path(src).resolve()),
+        ]
+        if extra_input:
+            args += ["-i", str(Path(extra_input).resolve())]
+        if vf:
+            if filter_complex:
+                args += ["-filter_complex", vf, "-map", "[vout]"]
+            else:
+                args += ["-vf", vf]
+        args += ["-frames:v", "1", "-q:v", "2", str(Path(out).resolve())]
+        proc = self._run(args, timeout=60)
+        if proc.returncode != 0 or not Path(out).exists():
+            raise FFmpegError(
+                f"Frame extraction failed: {proc.stderr.decode('utf-8', 'ignore')[-500:]}"
+            )
         return str(out)
 
     def burn(self, src: str, out: str, start: float, end: float, ass_path: str, *,

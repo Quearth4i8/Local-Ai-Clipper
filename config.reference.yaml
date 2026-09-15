@@ -197,3 +197,66 @@ server:
   host: 127.0.0.1         # localhost only — nothing leaves the machine
   port: 8420
   open_browser: true
+
+# ----------------------------------------------------------------------------
+# CAMPAIGN METADATA — per-clip YouTube/TikTok/Instagram title, description,
+# tags and hashtags, written by the local LLM to a text file next to each
+# exported clip. Edit these from the UI's "Campaign rules" box above the
+# export buttons — it round-trips to this same section.
+# ----------------------------------------------------------------------------
+campaign:
+  rules: ''                    # free text: naming rules, tone, required
+                                # @mentions/hashtags, banned words, CTAs...
+                                # the brief always wins over general best practice.
+  generate_metadata: false     # when true, "Export video clips" and the viral
+                                # compilation also write a *_metadata.txt file
+
+# ----------------------------------------------------------------------------
+# WATERMARK — optional logo/bug burned onto exported clips. Not required; only
+# used when a campaign brief calls for one. Set from the UI's "Campaign rules"
+# box (image picker + position/size/opacity), or point `path` at a PNG here.
+# A transparent PNG works best. Forces a re-encode (disables the lossless
+# stream-copy fast path for clips that would otherwise be copied untouched).
+# ----------------------------------------------------------------------------
+watermark:
+  enabled: false
+  path: ''                # absolute path to a PNG/JPG/WEBP logo
+  opacity: 0.85            # 0..1
+  scale: 0.18              # watermark width, as a fraction of the output frame width
+  margin: 0.04             # gap from the frame edge, as a fraction of min(width, height)
+  position: top_right      # top_right | top_left | bottom_right | bottom_left | center
+
+# ----------------------------------------------------------------------------
+# TIGHTENING — jump-cut editing from the word-level transcript already
+# captured by Whisper. Conservative by design: a pause shorter than min_gap is
+# never touched (normal speech rhythm); only the EXCESS above keep_pause on a
+# LONGER pause is removed, so a cut never reads as a jarring splice. Forces a
+# re-encode (a tightened clip is built from several segments, concatenated).
+# ----------------------------------------------------------------------------
+tightening:
+  enabled: false
+  remove_fillers: true    # drop "um", "uh", "erm", "hmm"... (word-level, not whole lines)
+  min_gap: 0.6             # seconds - pauses shorter than this are left alone
+  keep_pause: 0.35         # seconds - how much of a long pause survives the cut
+
+# ----------------------------------------------------------------------------
+# THUMBNAIL — auto-generated cover image per exported clip: the strongest
+# detected frame (usually the clearest face shot, via the same face detector
+# reframing uses) with the clip's hook line burned on top. Requires Pillow.
+# ----------------------------------------------------------------------------
+thumbnail:
+  enabled: false
+  text_color: '#FFFFFF'
+  outline_color: '#000000'
+  uppercase: true
+
+# ----------------------------------------------------------------------------
+# MUSIC — background music mixed in quietly under the clip's own dialogue.
+# Loops seamlessly if the song is shorter than the clip, and stays continuous
+# across a tightened clip's internal jump cuts (no restart-at-every-segment).
+# ----------------------------------------------------------------------------
+music:
+  enabled: false
+  path: ''                # absolute path to an mp3/wav/m4a/etc.
+  volume: 0.15             # 0..1 - how loud the music itself plays, under the dialogue
+  fade_seconds: 0.6        # fade-in/out at the very start/end of the clip

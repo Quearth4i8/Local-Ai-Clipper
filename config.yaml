@@ -32,8 +32,8 @@ llm:
   use_json_schema: true
   max_retries: 3
 clips:
-  min_duration: 20
-  max_duration: 90
+  min_duration: 10
+  max_duration: 35
   target_count: 10
   ideal_duration: 45
   block_seconds: 420
@@ -73,29 +73,55 @@ reframe:
   blur_strength: 28
 captions:
   enabled: true
-  font: Arial Rounded MT Bold
+  font: Arial Black
   fonts_dir: assets/fonts
-  font_size_ratio: 0.07
+  font_size_ratio: 0.075
   base_color: '#ffffff'
-  highlight_color: '#208ec5'
+  highlight_color: '#c52028'
   outline_color: '#000000'
   highlight_outline_color: ''
   outline_ratio: 0.09
   shadow_ratio: 0.05
   position: bottom
-  margin_v_ratio: 0.16
-  max_words: 4
+  margin_v_ratio: 0.3
+  max_words: 3
   max_chars: 0
   max_duration: 2.4
-  uppercase: false
+  uppercase: true
   strip_punctuation: true
   highlight_scale: 118
   animation_ms: 130
   fade_ms: 90
-  time_offset: -0.05
+  time_offset: -0.02
   lead_in_max: 0.12
   tail_hold: 0.1
 server:
   host: 127.0.0.1
   port: 8420
   open_browser: true
+campaign:
+  rules: 'Caption: "#TJR"'
+  generate_metadata: true
+watermark:
+  enabled: false
+  path: C:\Users\bjaou\Desktop\videos\TEOFIMO\DC PNG.png
+  opacity: 0.75
+  scale: 0.5
+  margin: 0.04
+  position: bottom_left
+tightening:
+  enabled: true
+  remove_fillers: true
+  min_gap: 0.6
+  keep_pause: 0.35
+thumbnail:
+  enabled: true
+  text_color: '#ffffff'
+  outline_color: '#000000'
+  uppercase: true
+music:
+  enabled: true
+  path: C:\Users\bjaou\Desktop\videos\music\KREZUS, Surreal_dvd - Skins (Ultra Slowed
+    + Reverb) - KREZUS.mp3
+  volume: 0.15
+  fade_seconds: 0.6

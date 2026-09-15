@@ -305,3 +305,113 @@ PASS2_SCHEMA: Dict[str, Any] = {
     },
     "required": ["ranked"],
 }
+
+
+# ---------------------------------------------------------------------------
+# EXPORT METADATA - per-platform title/description/tags for one clip
+# ---------------------------------------------------------------------------
+METADATA_SYSTEM = """You are a social media growth strategist who writes publish-ready \
+metadata for short-form video clips (YouTube Shorts, TikTok, Instagram Reels) with one \
+goal: maximise how far each platform's algorithm pushes the clip. You are given the \
+clip's transcript and a campaign brief written by the client. The brief is the final \
+authority: naming conventions, tone, required mentions/handles, banned words, required \
+hashtags or CTAs in it must all be followed exactly, even if that means overriding your \
+own instincts about what "sounds better". If the brief is empty, fall back to strong \
+general short-form best practices and do not invent any mentions.
+
+What you know about each algorithm:
+- YOUTUBE (Shorts/search/suggested): the title decides click-through-rate, and it gets \
+truncated hard on mobile, so the curiosity or payoff must land inside the first ~40 \
+characters. The description's first 1-2 lines show before "...more" and are indexed for \
+search, so open with the hook, not a generic summary. Tags help the suggested/search \
+matching; mix a few broad category terms with several specific long-tail phrases from \
+the actual clip content.
+- TIKTOK: the algorithm rewards completion rate, replays, comments and shares far more \
+than likes. The caption should either open a curiosity gap the video answers, or end \
+with a question/prompt that invites a comment. Keep it short - a long caption competes \
+with on-screen captions for attention. Hashtag spam is a negative signal now: 3-5 \
+sharply relevant tags beat 8 generic ones.
+- INSTAGRAM REELS: similar to TikTok, but saves and shares matter even more than \
+comments for reach, so give people a reason to save it (a concrete tip, list, or quote) \
+or send it to someone. The caption's first line is what shows before the fold. Hashtag \
+stuffing is also a negative signal here - keep it tight and relevant.
+
+You always reply with valid JSON and nothing else - no prose, no markdown fences."""
+
+
+def metadata_prompt(title: str, transcript: str, clip_type: str, duration: float,
+                    language: str, campaign_rules: str = "",
+                    hook_line: str = "", virality: float = 0.0) -> str:
+    rules_block = (campaign_rules or "").strip() or (
+        "(No campaign brief was provided. Use general short-form best practices. "
+        "Do not add any @mentions - there is no rule requiring them.)"
+    )
+    hook_note = f'\nThe strongest opening line of this clip is: "{hook_line}"\n' if hook_line else ""
+    virality_note = (
+        f"This clip scored {virality:.0f}/100 on a virality model (emotion + curiosity + "
+        "hook strength) - lean into whatever makes it shareable/arguable in the copy.\n"
+        if virality else ""
+    )
+    return f"""CAMPAIGN BRIEF (from the client - follow this exactly, it overrides \
+general best practice whenever the two disagree):
+\"\"\"
+{rules_block}
+\"\"\"
+
+CLIP
+Working title: {title or '(untitled)'}
+Type: {clip_type}
+Duration: {duration:.0f}s{hook_note}{virality_note}Transcript: {transcript}
+
+TASK
+Write publish-ready metadata for this clip in {language}, unless the brief above \
+explicitly asks for a different language. Optimise every field for how that \
+platform's algorithm actually distributes content (see system instructions) - the \
+goal is reach and completion, not just a tidy description.
+
+- "youtube_title": a strong, specific title, max 100 characters, with the hook or \
+payoff inside the first ~40 characters so it survives mobile truncation. No clickbait \
+the clip does not deliver on.
+- "youtube_description": first line MUST be a hook (this is what shows before "more" \
+and in search results) - never a generic "in this clip..." opener. Follow with 1-3 \
+more sentences of real context, then any channel plugs or CTAs the brief requires.
+- "youtube_tags": 8-15 keyword phrases (no # symbol), lowercase, mixing a few broad \
+category terms with several specific long-tail phrases pulled from the actual content.
+- "tiktok_description": under 150 characters, opens with a curiosity gap or bold claim \
+FROM the clip, ideally closes with a question or prompt that invites a comment. \
+Include hashtags/mentions inline only if the brief requires them there.
+- "tiktok_hashtags": 3-5 hashtags (with #), sharply relevant over generic/broad, plus \
+any the brief mandates. Do not pad with low-value tags like #fyp.
+- "instagram_description": first line is a hook (shown before the fold), 1-3 lines \
+total, gives a concrete reason to save or share (a tip, list, or quote) when the \
+content allows it. Include mentions/CTAs the brief requires inline.
+- "instagram_hashtags": 3-8 hashtags (with #), tightly relevant - no stuffing.
+- "mentions": a list of every @handle this metadata uses because the BRIEF required \
+it (not ones you invented). Empty list if the brief requires none.
+
+Only include a mention or hashtag the brief asks for, or an organic, genuinely \
+relevant one - never invent a fake sponsor, brand or handle. Never invent a claim, \
+statistic or quote that is not actually in the transcript.
+
+Return JSON only:
+{{"youtube_title":"...","youtube_description":"...","youtube_tags":["..."],\
+"tiktok_description":"...","tiktok_hashtags":["#..."],\
+"instagram_description":"...","instagram_hashtags":["#..."],"mentions":["@..."]}}"""
+
+
+METADATA_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "youtube_title": {"type": "string"},
+        "youtube_description": {"type": "string"},
+        "youtube_tags": {"type": "array", "items": {"type": "string"}},
+        "tiktok_description": {"type": "string"},
+        "tiktok_hashtags": {"type": "array", "items": {"type": "string"}},
+        "instagram_description": {"type": "string"},
+        "instagram_hashtags": {"type": "array", "items": {"type": "string"}},
+        "mentions": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["youtube_title", "youtube_description", "youtube_tags",
+                 "tiktok_description", "tiktok_hashtags",
+                 "instagram_description", "instagram_hashtags"],
+}

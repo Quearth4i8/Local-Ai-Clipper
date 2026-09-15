@@ -25,6 +25,7 @@
       <span class="pill loading" id="pill-gpu">GPU</span>
       <span class="pill loading" id="pill-llm">LLM</span>
     </div>
+    <button class="icon-btn" id="btn-insights" title="Performance insights">📈</button>
     <button class="icon-btn" id="btn-theme" title="Toggle theme">◐</button>
     <button class="icon-btn" id="btn-settings" title="Settings">⚙</button>
   </div>
@@ -145,6 +146,12 @@
         <label class="checkbox" title="Burn animated word-by-word captions into the exported clips">
           <input type="checkbox" id="opt-captions" checked> Captions
         </label>
+        <label class="checkbox" title="Jump-cut edit: shorten long pauses and drop filler words (um, uh...) using the word-level transcript">
+          <input type="checkbox" id="opt-tighten"> ✂ Tighten
+        </label>
+        <label class="checkbox" title="Auto-generate a cover image per clip: the strongest detected frame with the hook line burned on top">
+          <input type="checkbox" id="opt-thumbnail"> 🖼 Thumbnails
+        </label>
         <div class="menu-wrap">
           <button class="btn ghost" id="btn-export">Export data ▾</button>
           <div class="menu hidden" id="export-menu">
@@ -156,6 +163,89 @@
           </div>
         </div>
         <button class="btn primary" id="btn-cut">✂ Export video clips</button>
+        <button class="btn accent" id="btn-compilation" title="Stitch the selected clips into one video, auto-arranged to open on the strongest hook and close on the biggest payoff">🔥 Viral compilation</button>
+      </div>
+    </div>
+
+    <div class="campaign-box">
+      <button class="campaign-toggle" id="btn-campaign-toggle" type="button" aria-expanded="true">
+        <span>📋 Before you export: campaign rules &amp; watermark</span>
+        <span class="campaign-state" id="campaign-state">off</span>
+        <span class="chev">▾</span>
+      </button>
+      <div class="campaign-body" id="campaign-body">
+        <p class="hint">Set these up before exporting — they apply to every clip you export
+        below. Paste the brief for the campaign you're clipping for — naming conventions,
+        tone, required @mentions or hashtags, banned words, CTAs. It is read by the local
+        LLM when metadata is generated, and its instructions win over general best practice.</p>
+        <textarea id="campaign-rules" rows="5" spellcheck="false"
+          placeholder="e.g. Title format: [Guest name] on [topic]. Always mention @brandhandle in the TikTok and Instagram captions. Always include #BrandCampaign2026. No profanity in titles."></textarea>
+        <label class="checkbox strong">
+          <input type="checkbox" id="opt-metadata">
+          Generate a name/description/tags text file for each exported clip (YouTube, TikTok, Instagram)
+        </label>
+
+        <div class="watermark-box">
+          <label class="checkbox strong">
+            <input type="checkbox" id="opt-watermark">
+            Burn a watermark onto exported clips (optional — only if the campaign requires one)
+          </label>
+          <div class="watermark-controls hidden" id="watermark-controls">
+            <div class="wm-file-row">
+              <div class="wm-thumb-wrap">
+                <img id="wm-thumb" class="wm-thumb hidden" alt="watermark preview">
+                <span id="wm-thumb-empty" class="wm-thumb-empty">no image</span>
+              </div>
+              <input type="text" id="wm-path" spellcheck="false"
+                     placeholder="C:\path\to\logo.png (transparent PNG works best)">
+              <button class="btn ghost small" id="btn-wm-browse" type="button">Browse…</button>
+            </div>
+            <div class="wm-opts">
+              <label>Position
+                <select id="wm-position">
+                  <option value="top_right">Top right</option>
+                  <option value="top_left">Top left</option>
+                  <option value="bottom_right">Bottom right</option>
+                  <option value="bottom_left">Bottom left</option>
+                  <option value="center">Center</option>
+                </select>
+              </label>
+              <label>Size <span class="val" id="val-wm-scale">18%</span>
+                <input type="range" id="wm-scale" min="0.05" max="0.5" step="0.01">
+              </label>
+              <label>Opacity <span class="val" id="val-wm-opacity">85%</span>
+                <input type="range" id="wm-opacity" min="0.1" max="1" step="0.05">
+              </label>
+              <label>Margin <span class="val" id="val-wm-margin">4%</span>
+                <input type="range" id="wm-margin" min="0" max="0.15" step="0.01">
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="watermark-box">
+          <label class="checkbox strong">
+            <input type="checkbox" id="opt-music">
+            Add background music under the dialogue (optional — quiet by default, loops to fit)
+          </label>
+          <div class="watermark-controls hidden" id="music-controls">
+            <div class="wm-file-row">
+              <input type="text" id="music-path" spellcheck="false"
+                     placeholder="C:\path\to\song.mp3">
+              <button class="btn ghost small" id="btn-music-browse" type="button">Browse…</button>
+              <button class="btn ghost small" id="btn-music-play" type="button" title="Preview this file">▶</button>
+            </div>
+            <div class="wm-opts">
+              <label>Volume <span class="val" id="val-music-volume">15%</span>
+                <input type="range" id="music-volume" min="0.02" max="0.6" step="0.01">
+              </label>
+              <label>Fade <span class="val" id="val-music-fade">0.6s</span>
+                <input type="range" id="music-fade" min="0" max="2" step="0.1">
+              </label>
+            </div>
+            <audio id="music-audio-el" preload="none"></audio>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -225,6 +315,27 @@
             <button class="btn ghost small" id="btn-copy-text">⧉ Copy</button>
           </div>
           <p id="pv-text"></p>
+        </div>
+
+        <div class="perf-box">
+          <div class="pv-tr-head">
+            <span>📊 Track performance</span>
+          </div>
+          <div class="perf-history" id="perf-history"></div>
+          <div class="perf-form">
+            <select id="perf-platform">
+              <option value="tiktok">TikTok</option>
+              <option value="instagram">Instagram</option>
+              <option value="youtube">YouTube</option>
+              <option value="other">Other</option>
+            </select>
+            <input type="number" id="perf-views" min="0" placeholder="Views">
+            <input type="number" id="perf-likes" min="0" placeholder="Likes">
+            <input type="number" id="perf-comments" min="0" placeholder="Comments">
+            <input type="number" id="perf-shares" min="0" placeholder="Shares">
+            <input type="text" id="perf-notes" placeholder="Notes (optional)" class="perf-notes">
+            <button class="btn ghost small" id="btn-perf-save">+ Log result</button>
+          </div>
         </div>
       </div>
     </div>
@@ -354,6 +465,32 @@
             <input type="range" id="set-blend" min="0" max="0.6" step="0.05">
           </label>
         </fieldset>
+
+        <fieldset>
+          <legend>✂ Tighten pacing</legend>
+          <label class="checkbox inline"><input type="checkbox" id="set-tighten-fillers" checked>
+            Drop filler words (um, uh, erm...)</label>
+          <label>Pause trigger <span class="val" id="val-tighten-gap">0.6s</span>
+            <input type="range" id="set-tighten-gap" min="0.2" max="2" step="0.05">
+          </label>
+          <label>Kept pause <span class="val" id="val-tighten-keep">0.35s</span>
+            <input type="range" id="set-tighten-keep" min="0" max="1.5" step="0.05">
+          </label>
+          <p class="hint">A pause shorter than the trigger is left alone; a longer one is
+          shortened down to the kept-pause length, not removed entirely.</p>
+        </fieldset>
+
+        <fieldset>
+          <legend>🖼 Thumbnails</legend>
+          <label class="colour-row">Text
+            <input type="color" id="thumb-text-color">
+          </label>
+          <label class="colour-row">Outline
+            <input type="color" id="thumb-outline-color">
+          </label>
+          <label class="checkbox inline"><input type="checkbox" id="thumb-upper" checked> UPPERCASE</label>
+          <p class="hint" id="thumb-hint"></p>
+        </fieldset>
       </div>
 
       <div class="cache-block">
@@ -370,6 +507,26 @@
     <div class="modal-foot">
       <span class="hint">Saved to config.yaml</span>
       <button class="btn primary" id="btn-save-settings">Save settings</button>
+    </div>
+  </div>
+</div>
+
+<!-- ---------------------------------------------------------------- insights -->
+<div class="modal hidden" id="insights-modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>📈 Performance insights</h3>
+      <button class="icon-btn" id="btn-close-insights">✕</button>
+    </div>
+    <div class="modal-body" id="insights-body">
+      <p class="hint">Log how your exported clips actually performed (from the clip player)
+      and this reads back what worked - which score categories tracked with real engagement,
+      so you can tune the scoring weights from evidence instead of a guess.</p>
+      <div id="insights-content">—</div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint" id="insights-count"></span>
+      <button class="btn primary hidden" id="btn-apply-weights">Apply suggested weights</button>
     </div>
   </div>
 </div>

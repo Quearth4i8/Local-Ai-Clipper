@@ -123,6 +123,8 @@ async function refreshHealth() {
       h.llm.error || '');
     const list = $('model-list');
     if (list && h.llm.models) list.innerHTML = h.llm.models.map((m) => `<option value="${esc(m)}">`).join('');
+    state.pilAvailable = h.pillow ? !!h.pillow.ok : true;
+    if (!state.pilAvailable) $('opt-thumbnail').disabled = true;
     // Only ever populate the form from disk once, so the 30s refresh never
     // stomps on values the user is in the middle of editing.
     if (!state.formReady) { applyConfigToUI(h.config); state.formReady = true; }
@@ -360,6 +362,7 @@ function clipCard(c) {
       <div class="clip-meta">
         <span class="rank">#${c.rank}</span>
         <span class="type-chip" data-t="${esc(c.type)}">${esc(String(c.type).replace(/_/g, ' '))}</span>
+        ${c.virality >= 55 ? `<span class="chip viral" title="Virality score — how hard this clip grabs a scroll and drives replies/arguments">🔥 ${Math.round(c.virality)}</span>` : ''}
         ${c.confidence ? `<span class="chip" title="How confident the model was">conf ${Math.round(c.confidence * 100)}%</span>` : ''}
       </div>
       <div class="clip-title">${esc(c.title || '(untitled)')}</div>
@@ -418,6 +421,150 @@ $('sel-all').onchange = (e) => {
     cb.closest('.clip').classList.toggle('selected', on);
   });
   refreshSelCount();
+};
+
+/* -------------------------------------------------------- campaign rules */
+$('btn-campaign-toggle').onclick = () => {
+  const open = $('campaign-body').classList.toggle('hidden') === false;
+  $('btn-campaign-toggle').setAttribute('aria-expanded', String(open));
+};
+function syncCampaignState() {
+  const on = $('opt-metadata').checked || $('opt-watermark').checked || $('opt-music').checked;
+  $('campaign-state').textContent = on ? 'on' : 'off';
+  $('campaign-state').classList.toggle('on', on);
+}
+function saveCampaign() {
+  api('/api/config', {
+    method: 'POST',
+    body: { config: {
+      campaign: { rules: $('campaign-rules').value,
+                 generate_metadata: $('opt-metadata').checked },
+      watermark: {
+        enabled: $('opt-watermark').checked,
+        path: $('wm-path').value.trim(),
+        position: $('wm-position').value,
+        scale: +$('wm-scale').value,
+        opacity: +$('wm-opacity').value,
+        margin: +$('wm-margin').value,
+      },
+      music: {
+        enabled: $('opt-music').checked,
+        path: $('music-path').value.trim(),
+        volume: +$('music-volume').value,
+        fade_seconds: +$('music-fade').value,
+      },
+    }, save: true },
+  }).catch(() => {});
+}
+let campaignSaveTimer = null;
+function saveCampaignDebounced() {
+  clearTimeout(campaignSaveTimer);
+  campaignSaveTimer = setTimeout(saveCampaign, 800);
+}
+$('campaign-rules').addEventListener('input', saveCampaignDebounced);
+$('opt-metadata').addEventListener('change', () => { syncCampaignState(); saveCampaign(); });
+
+/* ------------------------------------------------------------ watermark */
+function syncWatermarkUI() {
+  const on = $('opt-watermark').checked;
+  $('watermark-controls').classList.toggle('hidden', !on);
+  syncCampaignState();
+}
+function setWatermarkThumb(path) {
+  const img = $('wm-thumb');
+  const empty = $('wm-thumb-empty');
+  if (path) {
+    img.src = `/api/media?path=${encodeURIComponent(path)}`;
+    img.classList.remove('hidden');
+    empty.classList.add('hidden');
+  } else {
+    img.classList.add('hidden');
+    img.removeAttribute('src');
+    empty.classList.remove('hidden');
+  }
+}
+$('wm-thumb').addEventListener('error', () => setWatermarkThumb(''));
+function syncWatermarkLabels() {
+  $('val-wm-scale').textContent = `${Math.round(+$('wm-scale').value * 100)}%`;
+  $('val-wm-opacity').textContent = `${Math.round(+$('wm-opacity').value * 100)}%`;
+  $('val-wm-margin').textContent = `${Math.round(+$('wm-margin').value * 100)}%`;
+}
+$('opt-watermark').addEventListener('change', () => { syncWatermarkUI(); saveCampaign(); });
+$('wm-position').addEventListener('change', saveCampaign);
+['wm-scale', 'wm-opacity', 'wm-margin'].forEach((id) => {
+  $(id).addEventListener('input', () => { syncWatermarkLabels(); saveCampaignDebounced(); });
+});
+$('wm-path').addEventListener('input', () => {
+  setWatermarkThumb($('wm-path').value.trim());
+  saveCampaignDebounced();
+});
+/* ---------------------------------------------------------------- music */
+function syncMusicUI() {
+  const on = $('opt-music').checked;
+  $('music-controls').classList.toggle('hidden', !on);
+  syncCampaignState();
+}
+function syncMusicLabels() {
+  $('val-music-volume').textContent = `${Math.round(+$('music-volume').value * 100)}%`;
+  $('val-music-fade').textContent = `${(+$('music-fade').value).toFixed(1)}s`;
+}
+$('opt-music').addEventListener('change', () => { syncMusicUI(); saveCampaign(); });
+['music-volume', 'music-fade'].forEach((id) => {
+  $(id).addEventListener('input', () => { syncMusicLabels(); saveCampaignDebounced(); });
+});
+$('music-path').addEventListener('input', saveCampaignDebounced);
+$('btn-music-browse').onclick = async () => {
+  const btn = $('btn-music-browse');
+  btn.disabled = true; btn.textContent = 'Opening…';
+  try {
+    const data = await api('/api/browse_audio', { method: 'POST' });
+    if (!data.cancelled) {
+      $('music-path').value = data.path;
+      saveCampaign();
+    }
+  } catch (e) {
+    toast(`${e.message} — paste the audio path instead.`, 'err', 7000);
+  } finally { btn.disabled = false; btn.textContent = 'Browse…'; }
+};
+$('btn-music-play').onclick = () => {
+  const el = $('music-audio-el');
+  const path = $('music-path').value.trim();
+  if (!path) { toast('No music file set', 'info', 2000); return; }
+  if (!el.paused && el.src.includes(encodeURIComponent(path))) {
+    el.pause();
+    $('btn-music-play').textContent = '▶';
+    return;
+  }
+  el.src = `/api/media?path=${encodeURIComponent(path)}`;
+  el.play().catch((e) => toast(`Could not play: ${e.message}`, 'err', 4000));
+  $('btn-music-play').textContent = '⏸';
+};
+$('music-audio-el').addEventListener('ended', () => { $('btn-music-play').textContent = '▶'; });
+$('music-audio-el').addEventListener('pause', () => { $('btn-music-play').textContent = '▶'; });
+
+/* ------------------------------------------------------ tighten/thumbnail */
+$('opt-tighten').addEventListener('change', () => {
+  api('/api/config', { method: 'POST',
+    body: { config: { tightening: { enabled: $('opt-tighten').checked } }, save: true } }).catch(() => {});
+});
+$('opt-thumbnail').addEventListener('change', () => {
+  api('/api/config', { method: 'POST',
+    body: { config: { thumbnail: { enabled: $('opt-thumbnail').checked } }, save: true } }).catch(() => {});
+});
+
+$('btn-wm-browse').onclick = async () => {
+  const btn = $('btn-wm-browse');
+  btn.disabled = true; btn.textContent = 'Opening…';
+  try {
+    const data = await api('/api/browse_image', { method: 'POST' });
+    if (!data.cancelled) {
+      $('wm-path').value = data.path;
+      setWatermarkThumb(data.path);
+      saveCampaign();
+    }
+  } catch (e) {
+    toast(`${e.message} — paste the image path instead.`, 'err', 7000);
+  } finally { btn.disabled = false; btn.textContent = 'Browse…'; }
 };
 
 /* ---------------------------------------------------------- format picker */
@@ -522,6 +669,8 @@ function playClip(rank, transcoded = false) {
   $('btn-prev-clip').disabled = idx <= 0;
   $('btn-next-clip').disabled = idx < 0 || idx >= state.clips.length - 1;
 
+  loadPerfHistory(rank);
+
   const p = encodeURIComponent(state.video.path);
   if (transcoded) {
     stopAt = null;
@@ -557,6 +706,66 @@ $('btn-cut-one').onclick = () => {
   if (state.active !== null) cutClips([state.active], $('btn-cut-one'));
 };
 
+/* ------------------------------------------------------------- performance */
+const PLATFORM_LABEL = { tiktok: 'TikTok', instagram: 'Instagram', youtube: 'YouTube', other: 'Other' };
+
+async function loadPerfHistory(rank) {
+  const hash = state.result && state.result.stats && state.result.stats.video_hash;
+  const box = $('perf-history');
+  if (!hash) { box.innerHTML = ''; return; }
+  box.innerHTML = '<span class="hint">Loading…</span>';
+  try {
+    const data = await api(`/api/performance?video_hash=${encodeURIComponent(hash)}`);
+    const entries = (data.entries || []).filter((e) => String(e.rank) === String(rank));
+    renderPerfHistory(entries);
+  } catch { box.innerHTML = ''; }
+}
+
+function renderPerfHistory(entries) {
+  const box = $('perf-history');
+  if (!entries.length) { box.innerHTML = '<span class="hint">No results logged yet.</span>'; return; }
+  box.innerHTML = entries.map((e) => `
+    <div class="perf-entry" data-id="${e.id}">
+      <span class="plat">${esc(PLATFORM_LABEL[e.platform] || e.platform || 'other')}</span>
+      <span class="stats">${(e.views || 0).toLocaleString()} views · ${(e.likes || 0).toLocaleString()} likes
+        · ${(e.comments || 0).toLocaleString()} comments${e.notes ? ` · ${esc(e.notes)}` : ''}</span>
+      <button class="perf-del" data-id="${e.id}" title="Delete">✕</button>
+    </div>`).join('');
+  box.querySelectorAll('.perf-del').forEach((b) => {
+    b.onclick = async () => {
+      try {
+        await api(`/api/performance/${b.dataset.id}`, { method: 'DELETE' });
+        loadPerfHistory(state.active);
+      } catch (e) { toast(e.message, 'err'); }
+    };
+  });
+}
+
+$('btn-perf-save').onclick = async () => {
+  if (state.active === null) return;
+  const btn = $('btn-perf-save');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await api('/api/performance', {
+      method: 'POST',
+      body: {
+        job_id: state.jobId, rank: String(state.active),
+        platform: $('perf-platform').value,
+        views: +$('perf-views').value || 0,
+        likes: +$('perf-likes').value || 0,
+        comments: +$('perf-comments').value || 0,
+        shares: +$('perf-shares').value || 0,
+        notes: $('perf-notes').value.trim() || null,
+      },
+    });
+    ['perf-views', 'perf-likes', 'perf-comments', 'perf-shares', 'perf-notes'].forEach((id) => { $(id).value = ''; });
+    toast('Performance logged', 'ok', 2500);
+    loadPerfHistory(state.active);
+  } catch (e) { toast(e.message, 'err', 6000); }
+  finally { btn.disabled = false; btn.textContent = label; }
+};
+
 video.addEventListener('timeupdate', () => {
   const c = clipOf(state.active);
   if (!c) return;
@@ -589,7 +798,9 @@ $('btn-captest').onclick = async () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ job_id: state.jobId, rank, seconds: 6, format: fmt,
                              layout: $('rf-layout').value,
-                             captions: $('opt-captions').checked }),
+                             captions: $('opt-captions').checked,
+                             watermark: $('opt-watermark').checked,
+                             music: $('opt-music').checked }),
     });
     if (!res.ok) throw new Error((await res.text()).slice(0, 300));
     const blob = await res.blob();
@@ -626,11 +837,35 @@ $('export-menu').onclick = async (e) => {
   }
 };
 
+/* Report exactly what happened to the metadata step - a silent miss (LLM
+   offline, model not installed, a clip's call failing) is the #1 reason it
+   looks like "nothing was generated". */
+function reportMetadata(metadata) {
+  if (!metadata) return;
+  if (metadata.error) {
+    toast(`Metadata not written: ${metadata.error}`, 'err', 9000);
+    return;
+  }
+  const ok = (metadata.written || []).length;
+  const failed = (metadata.failed || []).length;
+  if (ok) {
+    toast(`Wrote metadata for ${ok}/${metadata.requested} clip(s)`
+      + (failed ? ` — ${failed} failed` : ''), 'ok', 6000);
+  } else if (failed) {
+    toast(`Metadata generation failed for all ${failed} clip(s) — check the local LLM`, 'err', 9000);
+  }
+}
+
 $('btn-cut').onclick = () => cutClips([...state.selected], $('btn-cut'));
 
 async function cutClips(ranks, btn) {
   if (!ranks.length) { toast('No clips selected', 'info'); return; }
   const withCaptions = $('opt-captions').checked;
+  const withMetadata = $('opt-metadata').checked;
+  const withWatermark = $('opt-watermark').checked;
+  const withTighten = $('opt-tighten').checked;
+  const withThumbnail = $('opt-thumbnail').checked;
+  const withMusic = $('opt-music').checked;
   const formats = state.formats ? [...state.formats] : ['9:16'];
   const label = btn.textContent;
   const jobs = ranks.length * formats.length;
@@ -638,17 +873,71 @@ async function cutClips(ranks, btn) {
   btn.textContent = `Rendering ${jobs}…`;
   toast(`Rendering ${jobs} file(s): ${formats.join(', ')}`
     + (withCaptions ? ' with captions' : '')
+    + (withTighten ? ' + tightened pacing' : '')
+    + (withWatermark ? ' + watermark' : '')
+    + (withMusic ? ' + music' : '')
+    + (withThumbnail ? ' + thumbnails' : '')
+    + (withMetadata ? ' + writing metadata' : '')
     + '. Reframing analyses the video, so give it a moment.', 'info', 6000);
   try {
     const r = await api('/api/export_clips', {
       method: 'POST',
       body: { job_id: state.jobId, ranks, captions: withCaptions,
-              formats, layout: $('rf-layout').value },
+              formats, layout: $('rf-layout').value,
+              generate_metadata: withMetadata, campaign_rules: $('campaign-rules').value,
+              watermark: withWatermark, tighten: withTighten, thumbnail: withThumbnail,
+              music: withMusic },
     });
     toast(`${r.clips.length} file(s) written to ${r.folder}`, 'ok', 6000);
+    if (withMetadata) reportMetadata(r.metadata);
     api('/api/open_folder', { method: 'POST', body: { path: r.folder } }).catch(() => {});
   } catch (e) { toast(e.message, 'err', 10000); }
   finally { btn.disabled = false; btn.textContent = label; refreshSelCount(); }
+}
+
+/* ------------------------------------------------------- viral compilation */
+$('btn-compilation').onclick = () => buildCompilation([...state.selected]);
+
+async function buildCompilation(ranks) {
+  // Fewer than 2 picks isn't really a "compilation" choice, it's the whole
+  // set — fall back to the strongest moments by virality automatically.
+  const useAuto = ranks.length < 2;
+  const btn = $('btn-compilation');
+  const label = btn.textContent;
+  const withCaptions = $('opt-captions').checked;
+  const withMetadata = $('opt-metadata').checked;
+  const withWatermark = $('opt-watermark').checked;
+  const withTighten = $('opt-tighten').checked;
+  const withMusic = $('opt-music').checked;
+  const formats = state.formats ? [...state.formats] : ['9:16'];
+  btn.disabled = true;
+  btn.textContent = 'Building…';
+  toast(useAuto
+    ? 'No 2+ clips selected — auto-picking the highest-virality moments.'
+    : `Stitching ${ranks.length} clips into one viral-format cut…`, 'info', 5000);
+  try {
+    const r = await api('/api/export_compilation', {
+      method: 'POST',
+      body: {
+        job_id: state.jobId,
+        ranks: useAuto ? null : ranks,
+        captions: withCaptions,
+        formats,
+        layout: $('rf-layout').value,
+        generate_metadata: withMetadata,
+        campaign_rules: $('campaign-rules').value,
+        watermark: withWatermark,
+        tighten: withTighten,
+        music: withMusic,
+      },
+    });
+    const order = (r.files[0] && r.files[0].order) || [];
+    const seq = order.map((o) => `#${o.rank}`).join(' → ');
+    toast(`Compilation saved to ${r.folder} — order: ${seq}`, 'ok', 8000);
+    if (withMetadata) reportMetadata(r.metadata);
+    api('/api/open_folder', { method: 'POST', body: { path: r.folder } }).catch(() => {});
+  } catch (e) { toast(e.message, 'err', 10000); }
+  finally { btn.disabled = false; btn.textContent = label; }
 }
 
 /* ---------------------------------------------------------------- settings */
@@ -678,16 +967,68 @@ function applyConfigToUI(cfg) {
 
   applyCaptionsToUI(cfg.captions || {});
 
+  const camp = cfg.campaign || {};
+  $('campaign-rules').value = camp.rules || '';
+  $('opt-metadata').checked = !!camp.generate_metadata;
+
+  const wm = cfg.watermark || {};
+  $('opt-watermark').checked = !!wm.enabled;
+  $('wm-path').value = wm.path || '';
+  $('wm-position').value = wm.position || 'top_right';
+  $('wm-scale').value = wm.scale ?? 0.18;
+  $('wm-opacity').value = wm.opacity ?? 0.85;
+  $('wm-margin').value = wm.margin ?? 0.04;
+  syncWatermarkLabels();
+  syncWatermarkUI();
+  setWatermarkThumb(wm.path || '');
+
+  const mu = cfg.music || {};
+  $('opt-music').checked = !!mu.enabled;
+  $('music-path').value = mu.path || '';
+  $('music-volume').value = mu.volume ?? 0.15;
+  $('music-fade').value = mu.fade_seconds ?? 0.6;
+  syncMusicLabels();
+  syncMusicUI();
+
+  syncCampaignState();
+
+  const tg = cfg.tightening || {};
+  $('opt-tighten').checked = !!tg.enabled;
+  $('set-tighten-fillers').checked = tg.remove_fillers !== false;
+  $('set-tighten-gap').value = tg.min_gap ?? 0.6;
+  $('set-tighten-keep').value = tg.keep_pause ?? 0.35;
+  syncTightenLabels();
+
+  const th = cfg.thumbnail || {};
+  $('opt-thumbnail').checked = !!th.enabled;
+  $('thumb-text-color').value = th.text_color || '#FFFFFF';
+  $('thumb-outline-color').value = th.outline_color || '#000000';
+  $('thumb-upper').checked = th.uppercase !== false;
+  $('thumb-hint').textContent = state.pilAvailable === false
+    ? 'Pillow is not installed on the server - thumbnails will not generate. Run: pip install Pillow'
+    : 'Uses the strongest detected frame plus the clip\'s hook line.';
+
+  applyWeightsToUI(cfg.scoring.weights);
+}
+
+function applyWeightsToUI(weights) {
   $('weights').innerHTML = WEIGHT_KEYS.map((k) => `
     <div class="wrow"><span>${SCORE_LABEL[k]}</span>
-      <input type="range" min="0" max="40" step="1" data-w="${k}" value="${cfg.scoring.weights[k]}">
-      <b data-wv="${k}">${cfg.scoring.weights[k]}</b></div>`).join('');
+      <input type="range" min="0" max="40" step="1" data-w="${k}" value="${weights[k]}">
+      <b data-wv="${k}">${weights[k]}</b></div>`).join('');
   // Scoped to #weights: an unscoped [data-w] also matched the score bars in the
   // clip cards, which wrote junk keys like "84%": null into scoring.weights.
   $('weights').querySelectorAll('[data-w]').forEach((el) => {
     el.oninput = () => { document.querySelector(`[data-wv="${el.dataset.w}"]`).textContent = el.value; };
   });
 }
+
+function syncTightenLabels() {
+  $('val-tighten-gap').textContent = `${(+$('set-tighten-gap').value).toFixed(2)}s`;
+  $('val-tighten-keep').textContent = `${(+$('set-tighten-keep').value).toFixed(2)}s`;
+}
+$('set-tighten-gap').addEventListener('input', syncTightenLabels);
+$('set-tighten-keep').addEventListener('input', syncTightenLabels);
 $('set-div').oninput = (e) => { $('val-div').textContent = (+e.target.value).toFixed(2); };
 $('set-blend').oninput = (e) => { $('val-blend').textContent = (+e.target.value).toFixed(2); };
 
@@ -754,6 +1095,71 @@ $('btn-settings').onclick = async () => {
 $('btn-close-settings').onclick = () => $('settings-modal').classList.add('hidden');
 $('settings-modal').onclick = (e) => { if (e.target.id === 'settings-modal') e.target.classList.add('hidden'); };
 
+/* ---------------------------------------------------------------- insights */
+let lastInsights = null;
+
+$('btn-insights').onclick = async () => {
+  $('insights-modal').classList.remove('hidden');
+  const box = $('insights-content');
+  box.innerHTML = '<span class="hint">Loading…</span>';
+  $('btn-apply-weights').classList.add('hidden');
+  $('insights-count').textContent = '';
+  try {
+    const d = await api('/api/performance/insights');
+    lastInsights = d;
+    renderInsights(d);
+  } catch (e) {
+    box.innerHTML = `<span class="hint">${esc(e.message)}</span>`;
+  }
+};
+$('btn-close-insights').onclick = () => $('insights-modal').classList.add('hidden');
+$('insights-modal').onclick = (e) => { if (e.target.id === 'insights-modal') e.target.classList.add('hidden'); };
+
+function renderInsights(d) {
+  const box = $('insights-content');
+  if (!d.ready) {
+    box.innerHTML = `<p class="hint">${esc(d.reason || 'Not enough data logged yet.')}</p>`;
+    $('insights-count').textContent = `${d.count || 0} clip(s) logged so far`;
+    return;
+  }
+  $('insights-count').textContent = `${d.count} clip(s) logged · ${d.with_signal} used for the trend below`;
+
+  const rows = Object.entries(d.categories).map(([key, v]) => {
+    const pct = Math.min(50, Math.abs(v.correlation) * 50);
+    const cls = v.correlation >= 0 ? 'pos' : 'neg';
+    return `<div class="insight-row">
+      <b>${esc(key)}</b>
+      <span class="track"><span class="zero"></span>
+        <span class="fill ${cls}" style="width:${pct}%"></span></span>
+      <span class="note">${esc(v.note)} (${v.correlation.toFixed(2)})</span>
+    </div>`;
+  }).join('');
+
+  const typeRows = (d.by_clip_type || []).map((t) => `
+    <div class="insight-type-row"><b>${esc(t.clip_type.replace(/_/g, ' '))}</b>
+      <span>${t.avg_z >= 0 ? '+' : ''}${t.avg_z} avg (n=${t.count})</span></div>`).join('');
+
+  box.innerHTML = `
+    <h4 style="margin:14px 0 4px;font-size:13px;">Score category vs. engagement</h4>
+    ${rows}
+    <h4 style="margin:16px 0 4px;font-size:13px;">By clip type</h4>
+    ${typeRows || '<span class="hint">—</span>'}
+  `;
+  $('btn-apply-weights').classList.remove('hidden');
+}
+
+$('btn-apply-weights').onclick = async () => {
+  if (!lastInsights || !lastInsights.suggested_weights) return;
+  try {
+    await api('/api/config', {
+      method: 'POST',
+      body: { config: { scoring: { weights: lastInsights.suggested_weights } }, save: true },
+    });
+    applyWeightsToUI(lastInsights.suggested_weights);
+    toast('Scoring weights updated from performance data', 'ok', 5000);
+  } catch (e) { toast(e.message, 'err'); }
+};
+
 $('btn-save-settings').onclick = async () => {
   const weights = {};
   $('weights').querySelectorAll('[data-w]').forEach((el) => { weights[el.dataset.w] = +el.value; });
@@ -781,6 +1187,16 @@ $('btn-save-settings').onclick = async () => {
       uppercase: $('cap-upper').checked,
       strip_punctuation: $('cap-strip').checked,
       time_offset: +$('cap-sync').value / 1000,
+    },
+    tightening: {
+      remove_fillers: $('set-tighten-fillers').checked,
+      min_gap: +$('set-tighten-gap').value,
+      keep_pause: +$('set-tighten-keep').value,
+    },
+    thumbnail: {
+      text_color: $('thumb-text-color').value,
+      outline_color: $('thumb-outline-color').value,
+      uppercase: $('thumb-upper').checked,
     },
   };
   try {
