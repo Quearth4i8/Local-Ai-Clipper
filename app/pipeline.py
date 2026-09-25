@@ -351,13 +351,17 @@ class Pipeline:
         raw_candidates: List[Candidate] = []
 
         if llm_ok and backend is not None:
-            model_name = str(self.cfg.get("llm.model", "model"))
-            self.tick(0.0, f"Loading {model_name} into VRAM (first call is the slow one)")
+            llm_name = str(self.cfg.get("llm.model", "model"))
+            self.tick(0.0, f"Loading {llm_name} into VRAM (first call is the slow one)")
             warm_started = time.time()
             if backend.warmup():
                 self.log(f"Model loaded in {time.time() - warm_started:.0f}s")
 
             total_blocks = max(1, len(blocks))
+            # Few blocks (a short video) means few LLM calls, so each call has to
+            # propose more moments or the final set can't reach target_count.
+            want = 2 * int(clips_cfg.get("target_count", 12))
+            per_block = max(5, min(12, -(-want // total_blocks)))
             for n, block in enumerate(blocks, start=1):
                 self._check_cancel()
                 t0 = sentences[block[0]].start
@@ -371,6 +375,7 @@ class Pipeline:
                     backend, sentences, block, language, clips_cfg, weights,
                     hints=hints, window_scorer=window_scorer,
                     heuristic_blend=blend, on_log=self.log,
+                    max_results=per_block,
                 )
                 raw_candidates.extend(found)
                 self.tick(n / total_blocks,
@@ -383,6 +388,23 @@ class Pipeline:
             self.log(f"Falling back to the offline detector ({reason}).")
             for cand in heur_cands[: int(clips_cfg.get("max_candidates_pass1", 60))]:
                 raw_candidates.append(heuristic_only_scores(cand, window_scorer, weights))
+        else:
+            # The LLM found some moments, but too few to fill the request once
+            # overlaps are merged - top up with the best non-overlapping offline windows.
+            want = 2 * int(clips_cfg.get("target_count", 12))
+            added = 0
+            for cand in heur_cands:
+                if len(raw_candidates) >= want:
+                    break
+                if any(cand.overlap(c) > 0.05 for c in raw_candidates):
+                    continue
+                cand = heuristic_only_scores(cand, window_scorer, weights)
+                cand.reason = ("Added by the offline pattern detector because the LLM "
+                               "proposed fewer moments than requested.")
+                raw_candidates.append(cand)
+                added += 1
+            if added:
+                self.log(f"Added {added} offline-detector candidate(s) to fill the request")
         self.tick(1.0)
 
         cap = int(clips_cfg.get("max_candidates_pass1", 60))

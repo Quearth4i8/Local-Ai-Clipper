@@ -194,13 +194,14 @@ def analyze_block(
     window_scorer: Optional[WindowScorer] = None,
     heuristic_blend: float = 0.15,
     on_log: Optional[Callable[[str], None]] = None,
+    max_results: int = 5,
 ) -> List[Candidate]:
     start_idx, end_idx = block
     min_d = float(clips_cfg.get("min_duration", 20))
     max_d = float(clips_cfg.get("max_duration", 90))
 
     prompt = pass1_prompt(sentences, start_idx, end_idx, min_d, max_d, language,
-                          hints=hints, max_results=5)
+                          hints=hints, max_results=max_results)
     try:
         raw = backend.complete(SYSTEM, prompt, PASS1_SCHEMA, on_log=on_log)
     except LLMError as exc:
